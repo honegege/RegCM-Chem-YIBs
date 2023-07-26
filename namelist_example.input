@@ -1,0 +1,185 @@
+! Chinese domain 
+ &dimparam
+ iy     = 160,
+ jx     = 256,
+ kz     = 14,
+ nsg    = 1,
+ /
+! &coreparam
+ idynamic = 2,  ! Choice of dynamical core
+!                ! 1 = MM4 hydrostatical core
+!                ! 2 = MM5 NON hydrostatical core
+! /
+
+! Dynamical core parameters
+! &dynparam
+! gnu = 0.1,   ! nu factor for Asselin filter in leapfrog step.
+!                 ! MM5 manual , equation 2.4.6
+!                 ! Default 0.0625 for hydro, 0.1 for nonhydro
+! diffu_hgtf = 1, ! Add topographic effect to diffusion
+! /
+ &geoparam
+ iproj = 'LAMCON',
+ ds = 30.0,
+ ptop = 5.0,
+ clat = 36,
+ clon = 107,
+ plat = 36,
+ plon = 107,
+ truelatl = 25.0,
+ truelath = 50.0,
+ i_band = 0,
+ /
+ &terrainparam
+ domname = 'CHD',
+ smthbdy = .true.,
+ lakedpth = .false.,
+ fudge_lnd   = .false.,
+ fudge_lnd_s = .false.,
+ fudge_tex   = .false.,
+ fudge_tex_s = .false.,
+ dirter = 'input/2016',
+ inpter = '/date/regcm/rcm4data',
+ /
+ &debugparam
+ debug_level = 1,
+ dbgfrq = 3,
+ /
+ &boundaryparam
+ nspgx  = 12,
+ nspgd  = 12,
+ /
+ &globdatparam
+ ibdyfrq = 6,
+ ssttyp = 'OI_WK',
+ dattyp = 'EIN15',
+ chemtyp = 'MZCLM',
+ gdate1 = 2016010100,
+ gdate2 = 2016020100,
+ dirglob = 'input/2016',
+ inpglob = '/date/regcm/rcm4data',
+ /
+ &globwindow
+ lat0 = 0.0
+ lat1 = 0.0
+ lon0 = 0.0
+ lon1 = 0.0
+ /
+ &restartparam
+ ifrest  = .false. ,
+ mdate0  = 2016010100,
+ mdate1  = 2016010100,
+ mdate2  = 2016020100,
+ /
+ &timeparam
+ dtrad   =    30.,
+ dtabem  =    18.,
+ dtsrf   =   600.,
+ dt      =   60.,
+ dtche   =   600.,
+ /
+ &outparam
+ ifsave  = .true. ,
+  savfrq  =    0.,
+ ifatm  = .true. ,
+ atmfrq  =     24.,
+ ifrad   = .true. ,
+   radfrq  =   24.,
+ ifsrf   = .true. ,
+   srffrq  =   24.,
+ifsts   = .false. ,
+ ifsub   = .false. ,
+ ifchem  = .true.,
+   chemfrq =     1.,
+ ifopt   = .true., 
+ dirout = 'output/2016',
+ /
+ &physicsparam
+ iboudy  =          5,
+ ibltyp  =          1,
+ icup_lnd    =          2,
+ icup_ocn    =          2,
+ ipptls  =          2,
+ iocnflx =          2,
+ ipgf    =          0,
+ iemiss  =          1,
+ lakemod =          0,
+ ichem   =          1,
+ scenario = 'A1B',
+ idcsst = 0,
+ iseaice = 0,
+ idesseas = 1,
+ iconvlwp = 1,
+ /
+ &subexparam
+ qck1land=   .250E-03,
+ qck1oce =   .250E-03,
+ cevaplnd   =   .100E-02,
+ caccrlnd   =      3.000,
+ cftotmax =      0.75,
+ /
+ &grellparam
+ igcc    =          2,
+ gcr0 = 0.0020,      ! Conversion rate from cloud to rain
+ edtmin      = 0.20, ! Minimum Precipitation Efficiency land
+ edtmin_ocn  = 0.20, ! Minimum Precipitation Efficiency ocean
+ edtmax      = 0.80, ! Maximum Precipitation Efficiency land
+ edtmax_ocn  = 0.80, ! Maximum Precipitation Efficiency ocean
+ edtmino     = 0.20, ! Minimum Tendency Efficiency (o var) land
+ edtmino_ocn = 0.20, ! Minimum Tendency Efficiency (o var) ocean
+ edtmaxo     = 0.80, ! Maximum Tendency Efficiency (o var) land
+ edtmaxo_ocn = 0.80, ! Maximum Tendency Efficiency (o var) ocean
+ edtminx     = 0.20, ! Minimum Tendency Efficiency (x var) land
+ edtminx_ocn = 0.20, ! Minimum Tendency Efficiency (x var) ocean
+ edtmaxx     = 0.80, ! Maximum Tendency Efficiency (x var) land
+ edtmaxx_ocn = 0.80, ! Maximum Tendency Efficiency (x var) ocean
+ shrmin      = 0.30, ! Minimum Shear effect on precip eff. land
+ shrmin_ocn  = 0.30, ! Minimum Shear effect on precip eff. ocean
+ shrmax      = 0.90, ! Maximum Shear effect on precip eff. land
+ shrmax_ocn  = 0.90, ! Maximum Shear effect on precip eff. ocean
+ pbcmax = 50.0,      ! Max depth (mb) of stable layer b/twn LCL & LFC
+ mincld = 150.0,     ! Min cloud depth (mb).
+ htmin = -250.0,     ! Min convective heating
+ htmax = 500.0,      ! Max convective heating
+ skbmax = 0.4,       ! Max cloud base height in sigma
+ dtauc = 30.0D0      ! Fritsch & Chappell (1980) ABE Removal Timescale (min)
+ /
+
+&emanparam
+ elcrit  = 0.0011D0,
+ coeffr  = 1.0D0,
+ /
+ &holtslagparam
+ /
+ &chemparam
+ chemsimtype = 'DCCB',
+ ichsolver = 1,
+ idirect   = 2,
+ ichebdy   = 1,
+ ichdiag   = 0,
+ ichdrdepo = 1,
+ ichcumtra = 1,
+ ichremlsc = 1,
+ ichremcvc = 1,
+/
+  &clmparam
+ dirclm = 'input',
+ imask  = 1,
+ clmfrq = 12.,
+ /
+! CLM 4.5 parameters
+!
+ &clm_inparm
+ fpftcon = 'pft-physiology.c130503.nc',
+ fsnowoptics = 'snicar_optics_5bnd_c090915.nc',
+ fsnowaging = 'snicar_drdt_bst_fit_60_c070416.nc',
+ /
+ &clm_soilhydrology_inparm
+ h2osfcflag = 1,
+ origflag = 0,
+ /
+ &clm_hydrology1_inparm
+ oldfflag = 0,
+ /
+
+

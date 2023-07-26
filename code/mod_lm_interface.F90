@@ -1,0 +1,2170 @@
+!::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+!
+!    This file is part of ICTP RegCM.
+!
+!    ICTP RegCM is free software: you can redistribute it and/or modify
+!    it under the terms of the GNU General Public License as published by
+!    the Free Software Foundation, either version 3 of the License, or
+!    (at your option) any later version.
+!
+!    ICTP RegCM is distributed in the hope that it will be useful,
+!    but WITHOUT ANY WARRANTY; without even the implied warranty of
+!    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+!    GNU General Public License for more details.
+!
+!    You should have received a copy of the GNU General Public License
+!    along with ICTP RegCM.  If not, see <http://www.gnu.org/licenses/>.
+!
+!::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+module mod_lm_interface
+!
+! Link surface and atmospheric models
+!
+  use mod_runparams
+  use mod_memutil
+  use mod_regcm_types
+  use mod_outvars
+  use mod_mppparam
+  use mod_mpmessage
+  use mod_service
+  use mod_bats_common
+  use mod_ocn_common
+  use mod_che_common
+  use run_yibs
+#ifdef CLM
+  use mod_clm
+  use mod_mtrxclm
+  use clm_varsur , only : landmask , numdays
+  use clm_varctl , only : filer_rest
+  use clm_time_manager , only : get_step_size
+  use restFileMod , only : restFile_write, restFile_write_binary
+  use restFileMod , only : restFile_filename
+  use spmdMod , only : mpicom
+  use perf_mod , only : t_prf , t_finalizef
+#endif
+
+#ifdef CLM45
+  use mod_clm_regcm
+#endif
+
+  implicit none
+
+  private
+
+  ! Coupling variables
+  real(rkx) :: runoffcount = 0.0_rkx
+  public :: lms
+
+  public :: dtbat
+
+  public :: ocncomm , lndcomm
+
+  public :: import_data_into_surface
+  public :: export_data_from_surface
+
+  public :: allocate_surface_model
+  public :: surface_albedo
+  public :: surface_model
+  public :: init_surface_model
+  public :: initialize_surface_model
+#ifdef CLM
+  public :: get_step_size
+  public :: filer_rest
+  public :: restFile_write
+  public :: restFile_write_binary
+  public :: restFile_filename
+  public :: numdays
+  public :: r2ceccf
+  public :: mpicom
+  public :: t_prf
+  public :: t_finalizef
+#endif
+
+#ifdef CLM45
+  real(rkx) , pointer , dimension(:,:) :: patm , tatm , uatm , vatm , &
+    thatm , qvatm , zatm
+#endif
+
+  type(lm_exchange) :: lm
+  type(lm_state) :: lms
+
+  contains
+
+#include <pfesat.inc>
+#include <pfwsat.inc>
+
+  subroutine allocate_surface_model
+    implicit none
+
+    rdnnsg = d_one/real(nnsg,rkx)
+!!! xiaoxie 2017 added
+    call getmem2d(lms%mvegid,jci1,jci2,ici1,ici2,'lm:mvegid')
+    call getmem2d(lms%vcrop,jci1,jci2,ici1,ici2,'lm:vcrop')
+    call getmem2d(lms%soil_c,jci1,jci2,ici1,ici2,'lm:soil_c')
+    call getmem3d(lms%vfrac,jci1,jci2,ici1,ici2,1,18,'lm:evpr')
+    call getmem3d(lms%clmfrac,jci1,jci2,ici1,ici2,1,18,'lm:evpr')
+    call getmem3d(lms%vlandf,jci1,jci2,ici1,ici2,1,12,'lm:deltat')
+    call getmem3d(lms%vheight,jci1,jci2,ici1,ici2,1,16,'lm:deltaq')
+    call getmem3d(lms%cpool,jci1,jci2,ici1,ici2,1,16,'lm:deltaq')
+    call getmem3d(lms%clmhit,jci1,jci2,ici1,ici2,1,16,'lm:deltaq')
+    call getmem3d(lms%vlaix,jci1,jci2,ici1,ici2,1,16,'lm:drag')
+    call getmem3d(lms%frac_isl,jci1,jci2,ici1,ici2,1,16,'lm:drag')
+    call getmem3d(lms%crop_cal,jci1,jci2,ici1,ici2,1,2,'lm:ustar')
+    call getmem3d(lms%stext,jci1,jci2,ici1,ici2,1,5,'lm:ustar')
+    call getmem4d(lms%vlai,jci1,jci2,ici1,ici2,1,16,1,12,'lm:zo')
+    call getmem4d(lms%clmlai,jci1,jci2,ici1,ici2,1,16,1,12,'lm:zo')
+    call getmem4d(lms%ystmp,jci1,jci2,ici1,ici2,1,10,1,744,'lm:zo')
+    call getmem4d(lms%ysmq,jci1,jci2,ici1,ici2,1,10,1,744,'lm:zo')
+    call getmem4d(lms%yslmp,jci1,jci2,ici1,ici2,1,10,1,744,'lm:zo')
+    call getmem4d(lms%ysifc,jci1,jci2,ici1,ici2,1,10,1,744,'lm:zo')
+    call getmem3d(lms%ych,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%ytaf,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%yqaf,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%ytas,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%yuas,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%yvas,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%ypard,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%yparf,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%yfwet,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    call getmem3d(lms%ycosz,jci1,jci2,ici1,ici2,1,744,'lm:drag')
+    lms%mvegid(jci1:jci2,ici1:ici2) = -1_rk4
+    lms%vcrop(jci1:jci2,ici1:ici2) = 0.0_rkx
+    lms%soil_c(jci1:jci2,ici1:ici2) = 0.0_rkx
+    lms%vfrac(jci1:jci2,ici1:ici2,1:18) = 0.0_rkx
+    lms%clmfrac(jci1:jci2,ici1:ici2,1:18) = 0.0_rkx
+    lms%vlandf(jci1:jci2,ici1:ici2,1:12) = 0.0_rkx
+    lms%vheight(jci1:jci2,ici1:ici2,1:16) = 0.0_rkx
+    lms%cpool(jci1:jci2,ici1:ici2,1:16) = 0.0_rkx
+    lms%clmhit(jci1:jci2,ici1:ici2,1:16) = 0.0_rkx
+    lms%vlaix(jci1:jci2,ici1:ici2,1:16) = 0.0_rkx
+    lms%frac_isl(jci1:jci2,ici1:ici2,1:16) = 0.0_rkx
+    lms%crop_cal(jci1:jci2,ici1:ici2,1:2) = 0.0_rkx
+    lms%stext(jci1:jci2,ici1:ici2,1:5) = 0.0_rkx
+    lms%vlai(jci1:jci2,ici1:ici2,1:16,1:12) = 0.0_rkx
+    lms%clmlai(jci1:jci2,ici1:ici2,1:16,1:12) = 0.0_rkx
+    lms%ystmp(jci1:jci2,ici1:ici2,1:10,1:744) = 0.0_rkx
+    lms%ysmq(jci1:jci2,ici1:ici2,1:10,1:744) = 0.0_rkx
+    lms%yslmp(jci1:jci2,ici1:ici2,1:10,1:744) = 0.0_rkx
+    lms%ysifc(jci1:jci2,ici1:ici2,1:10,1:744) = 0.0_rkx
+    lms%ych(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%ytaf(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%yqaf(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%ytas(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%yuas(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%yvas(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%ypard(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%yparf(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%yfwet(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+    lms%ycosz(jci1:jci2,ici1:ici2,1:744) = 0.0_rkx
+!!!
+    call getmem3d(lms%sent,1,nnsg,jci1,jci2,ici1,ici2,'lm:sent')
+    call getmem3d(lms%evpr,1,nnsg,jci1,jci2,ici1,ici2,'lm:evpr')
+    call getmem3d(lms%deltat,1,nnsg,jci1,jci2,ici1,ici2,'lm:deltat')
+    call getmem3d(lms%deltaq,1,nnsg,jci1,jci2,ici1,ici2,'lm:deltaq')
+    call getmem3d(lms%drag,1,nnsg,jci1,jci2,ici1,ici2,'lm:drag')
+    call getmem3d(lms%ustar,1,nnsg,jci1,jci2,ici1,ici2,'lm:ustar')
+    call getmem3d(lms%zo,1,nnsg,jci1,jci2,ici1,ici2,'lm:zo')
+    call getmem3d(lms%rhoa,1,nnsg,jci1,jci2,ici1,ici2,'lm:rho')
+    call getmem3d(lms%lncl,1,nnsg,jci1,jci2,ici1,ici2,'lm:lncl')
+    call getmem3d(lms%prcp,1,nnsg,jci1,jci2,ici1,ici2,'lm:prcp')
+    call getmem3d(lms%snwm,1,nnsg,jci1,jci2,ici1,ici2,'lm:snwm')
+    call getmem3d(lms%trnof,1,nnsg,jci1,jci2,ici1,ici2,'lm:trnof')
+    call getmem3d(lms%srnof,1,nnsg,jci1,jci2,ici1,ici2,'lm:srnof')
+    call getmem3d(lms%xlai,1,nnsg,jci1,jci2,ici1,ici2,'lm:xlai')
+    call getmem3d(lms%sfcp,1,nnsg,jci1,jci2,ici1,ici2,'lm:sfcp')
+    call getmem3d(lms%q2m,1,nnsg,jci1,jci2,ici1,ici2,'lm:q2m')
+    call getmem3d(lms%t2m,1,nnsg,jci1,jci2,ici1,ici2,'lm:t2m')
+    call getmem3d(lms%u10m,1,nnsg,jci1,jci2,ici1,ici2,'lm:u10m')
+    call getmem3d(lms%v10m,1,nnsg,jci1,jci2,ici1,ici2,'lm:v10m')
+    call getmem3d(lms%taux,1,nnsg,jci1,jci2,ici1,ici2,'lm:taux')
+    call getmem3d(lms%tauy,1,nnsg,jci1,jci2,ici1,ici2,'lm:tauy')
+    call getmem3d(lms%wt,1,nnsg,jci1,jci2,ici1,ici2,'lm:wt')
+    call getmem3d(lms%swalb,1,nnsg,jci1,jci2,ici1,ici2,'lm:swalb')
+    call getmem3d(lms%lwalb,1,nnsg,jci1,jci2,ici1,ici2,'lm:lwalb')
+    call getmem3d(lms%swdiralb,1,nnsg,jci1,jci2,ici1,ici2,'lm:swdiralb')
+    call getmem3d(lms%lwdiralb,1,nnsg,jci1,jci2,ici1,ici2,'lm:lwdiralb')
+    call getmem3d(lms%swdifalb,1,nnsg,jci1,jci2,ici1,ici2,'lm:swdifalb')
+    call getmem3d(lms%lwdifalb,1,nnsg,jci1,jci2,ici1,ici2,'lm:lwdifalb')
+
+    call getmem3d(lms%gwet,1,nnsg,jci1,jci2,ici1,ici2,'lm:gwet')
+    call getmem3d(lms%ldew,1,nnsg,jci1,jci2,ici1,ici2,'lm:ldew')
+    call getmem4d(lms%sw,1,nnsg,jci1,jci2,ici1,ici2,1,num_soil_layers,'lm:sw')
+    call getmem4d(lms%sm,1,nnsg,jci1,jci2,ici1,ici2,1,num_soil_layers,'lm:sm')  !!! xiaoxie 2017
+    call getmem4d(lms%soilm,1,nnsg,jci1,jci2,ici1,ici2,1,num_soil_layers,'lm:soilm')  !!! xiaoxie 2017
+    call getmem4d(lms%ifrac,1,nnsg,jci1,jci2,ici1,ici2,1,num_soil_layers,'lm:ifrac')  !!! xiaoxie 2017
+    call getmem4d(lms%smp,1,nnsg,jci1,jci2,ici1,ici2,1,num_soil_layers,'lm:smp')  !!! xiaoxie 2017
+#ifndef CLM45
+    call assignpnt(lms%sw,lms%ssw,1)
+    call assignpnt(lms%sw,lms%rsw,2)
+    call assignpnt(lms%sw,lms%tsw,3)
+#else
+    call assignpnt(lms%sw,lms%ssw,1)
+    call assignpnt(lms%sw,lms%rsw,2)
+    call getmem3d(lms%tsw,1,nnsg,jci1,jci2,ici1,ici2,'lm:tsw')
+    call getmem3d(lms%tsoilm,1,nnsg,jci1,jci2,ici1,ici2,'lm:tsoilm')  !!! xiaoxie 2017
+    call getmem3d(lms%tsm,1,nnsg,jci1,jci2,ici1,ici2,'lm:tsm')  !!! xiaoxie 2017
+    call getmem3d(lms%tifrac,1,nnsg,jci1,jci2,ici1,ici2,'lm:tifrac')  !!! xiaoxie 2017
+    call getmem3d(lms%tsmp,1,nnsg,jci1,jci2,ici1,ici2,'lm:tsmp')  !!! xiaoxie 2017
+#endif
+    call getmem3d(lms%tgbb,1,nnsg,jci1,jci2,ici1,ici2,'lm:tgbb')
+    call getmem3d(lms%tgrd,1,nnsg,jci1,jci2,ici1,ici2,'lm:tgrd')
+    call getmem3d(lms%tgbrd,1,nnsg,jci1,jci2,ici1,ici2,'lm:tgbrd')
+    call getmem3d(lms%tlef,1,nnsg,jci1,jci2,ici1,ici2,'lm:tlef')
+    call getmem3d(lms%taf,1,nnsg,jci1,jci2,ici1,ici2,'lm:taf')
+    call getmem3d(lms%qaf,1,nnsg,jci1,jci2,ici1,ici2,'lm:qaf')                !!! xiaoxie 2017
+    call getmem3d(lms%fwet,1,nnsg,jci1,jci2,ici1,ici2,'lm:fwet')            !!! xiaoxie 2017
+    call getmem3d(lms%parsun_z,1,nnsg,jci1,jci2,ici1,ici2,'lm:parsun_z')    !!! xiaoxie 2017
+    call getmem3d(lms%parsha_z,1,nnsg,jci1,jci2,ici1,ici2,'lm:parsha_z')    !!! xiaoxie 2017
+    call getmem3d(lms%gb_mol,1,nnsg,jci1,jci2,ici1,ici2,'lm:gb_mol')    !!! xiaoxie 2017
+    call getmem3d(lms%sigf,1,nnsg,jci1,jci2,ici1,ici2,'lm:sigf')
+    call getmem3d(lms%sfice,1,nnsg,jci1,jci2,ici1,ici2,'lm:sfice')
+    call getmem3d(lms%snag,1,nnsg,jci1,jci2,ici1,ici2,'lm:snag')
+    call getmem3d(lms%sncv,1,nnsg,jci1,jci2,ici1,ici2,'lm:sncv')
+    call getmem3d(lms%scvk,1,nnsg,jci1,jci2,ici1,ici2,'lm:scvk')
+    call getmem3d(lms%um10,1,nnsg,jci1,jci2,ici1,ici2,'lm:um10')
+    call getmem3d(lms%emisv,1,nnsg,jci1,jci2,ici1,ici2,'lm:emisv')
+#ifdef CLM45
+    call getmem2d(patm,jci1,jci2,ici1,ici2,'lm:patm')
+    call getmem2d(tatm,jci1,jci2,ici1,ici2,'lm:tatm')
+    call getmem2d(uatm,jci1,jci2,ici1,ici2,'lm:uatm')
+    call getmem2d(vatm,jci1,jci2,ici1,ici2,'lm:vatm')
+    call getmem2d(thatm,jci1,jci2,ici1,ici2,'lm:thatm')
+    call getmem2d(qvatm,jci1,jci2,ici1,ici2,'lm:qvatm')
+    call getmem2d(zatm,jci1,jci2,ici1,ici2,'lm:zatm')
+    call getmem4d(lms%vocemiss,1,nnsg,jci1,jci2,ici1,ici2,1,ntr,'lm:vocemiss')
+    call getmem4d(lms%dustemiss,1,nnsg,jci1,jci2,ici1,ici2,1,4,'lm:dustemiss')
+    call getmem4d(lms%drydepvels,1,nnsg,jci1,jci2,ici1,ici2,1,ntr,'lm:dustemiss')
+
+#endif
+
+#ifdef CLM
+    call getmem2d(r2ctb,jde1,jde2,ide1,ide2,'clm:r2ctb')
+    call getmem2d(r2cqb,jde1,jde2,ide1,ide2,'clm:r2cqb')
+    call getmem2d(r2czga,jde1,jde2,ide1,ide2,'clm:r2czga')
+    call getmem2d(r2cpsb,jde1,jde2,ide1,ide2,'clm:r2cpsb')
+    call getmem2d(r2cuxb,jde1,jde2,ide1,ide2,'clm:r2cuxb')
+    call getmem2d(r2cvxb,jde1,jde2,ide1,ide2,'clm:r2cvxb')
+    call getmem2d(r2crnc,jde1,jde2,ide1,ide2,'clm:r2crnc')
+    call getmem2d(r2crnnc,jde1,jde2,ide1,ide2,'clm:r2crnnc')
+    call getmem2d(r2csols,jde1,jde2,ide1,ide2,'clm:r2csols')
+    call getmem2d(r2csoll,jde1,jde2,ide1,ide2,'clm:r2csoll')
+    call getmem2d(r2csolsd,jde1,jde2,ide1,ide2,'clm:r2csolsd')
+    call getmem2d(r2csolld,jde1,jde2,ide1,ide2,'clm:r2csolld')
+    call getmem2d(r2cflwd,jde1,jde2,ide1,ide2,'clm:r2cflwd')
+    call getmem2d(r2cxlat,jde1,jde2,ide1,ide2,'clm:r2cxlat')
+    call getmem2d(r2cxlon,jde1,jde2,ide1,ide2,'clm:r2cxlon')
+    call getmem2d(r2cxlatd,jde1,jde2,ide1,ide2,'clm:r2cxlatd')
+    call getmem2d(r2cxlond,jde1,jde2,ide1,ide2,'clm:r2cxlond')
+
+    call getmem2d(r2ctb_all,1,jx,1,iy,'clm:r2ctb_all')
+    call getmem2d(r2cqb_all,1,jx,1,iy,'clm:r2cqb_all')
+    call getmem2d(r2czga_all,1,jx,1,iy,'clm:r2czga_all')
+    call getmem2d(r2cpsb_all,1,jx,1,iy,'clm:r2cpsb_all')
+    call getmem2d(r2cuxb_all,1,jx,1,iy,'clm:r2cuxb_all')
+    call getmem2d(r2cvxb_all,1,jx,1,iy,'clm:r2cvxb_all')
+    call getmem2d(r2crnc_all,1,jx,1,iy,'clm:r2crnc_all')
+    call getmem2d(r2crnnc_all,1,jx,1,iy,'clm:r2crnnc_all')
+    call getmem2d(r2csols_all,1,jx,1,iy,'clm:r2csols_all')
+    call getmem2d(r2csoll_all,1,jx,1,iy,'clm:r2csoll_all')
+    call getmem2d(r2csolsd_all,1,jx,1,iy,'clm:r2csolsd_all')
+    call getmem2d(r2csolld_all,1,jx,1,iy,'clm:r2csolld_all')
+    call getmem2d(r2cflwd_all,1,jx,1,iy,'clm:r2cflwd_all')
+    call getmem2d(r2ccosz_all,1,jx,1,iy,'clm:r2ccosz_all')
+    call getmem2d(r2cxlat_all,1,jx,1,iy,'clm:r2cxlat_all')
+    call getmem2d(r2cxlon_all,1,jx,1,iy,'clm:r2cxlon_all')
+    call getmem2d(r2cxlatd_all,1,jx,1,iy,'clm:r2cxlatd_all')
+    call getmem2d(r2cxlond_all,1,jx,1,iy,'clm:r2cxlond_all')
+
+    call getmem2d(c2rtgb,1,jx,1,iy,'clm:c2rtgb')
+    call getmem2d(c2rsenht,1,jx,1,iy,'clm:c2rsenht')
+    call getmem2d(c2rlatht,1,jx,1,iy,'clm:c2rlatht')
+    call getmem2d(c2ralbdirs,1,jx,1,iy,'clm:c2ralbdirs')
+    call getmem2d(c2ralbdirl,1,jx,1,iy,'clm:c2ralbdirl')
+    call getmem2d(c2ralbdifs,1,jx,1,iy,'clm:c2ralbdifs')
+    call getmem2d(c2ralbdifl,1,jx,1,iy,'clm:c2ralbdifl')
+    call getmem2d(c2rtaux,1,jx,1,iy,'clm:c2rtaux')
+    call getmem2d(c2rtauy,1,jx,1,iy,'clm:c2rtauy')
+    call getmem2d(c2ruvdrag,1,jx,1,iy,'clm:c2ruvdrag')
+    call getmem2d(c2rlsmask,1,jx,1,iy,'clm:c2rlsmask')
+    call getmem2d(c2rtgbb,1,jx,1,iy,'clm:c2rtgbb')
+    call getmem2d(c2rsnowc,1,jx,1,iy,'clm:c2rsnowc')
+    call getmem2d(c2rtest,1,jx,1,iy,'clm:c2rtest')
+    call getmem2d(c2r2mt,1,jx,1,iy,'clm:c2r2mt')
+    call getmem2d(c2r2mq,1,jx,1,iy,'clm:c2r2mq')
+    call getmem2d(c2rtlef,1,jx,1,iy,'clm:c2rtlef')
+    call getmem2d(c2ru10,1,jx,1,iy,'clm:c2ru10')
+    call getmem2d(c2rsm10cm,1,jx,1,iy,'clm:c2rsm10cm')
+    call getmem2d(c2rsm1m,1,jx,1,iy,'clm:c2rsm1m')
+    call getmem2d(c2rsmtot,1,jx,1,iy,'clm:c2rsmtot')
+    call getmem2d(c2rinfl,1,jx,1,iy,'clm:c2rinfl')
+    call getmem2d(c2rro_sur,1,jx,1,iy,'clm:c2rro_sur')
+    call getmem2d(c2rro_sub,1,jx,1,iy,'clm:c2rro_sub')
+    call getmem2d(c2rfracsno,1,jx,1,iy,'clm:c2rfracsno')
+    call getmem2d(c2rfvegnosno,1,jx,1,iy,'clm:c2rfvegnosno')
+    call getmem2d(c2rprocmap,1,jx,1,iy,'clm:c2rprocmap')
+    call getmem1d(c2rngc,1,nproc,'clm:c2rngc')
+    call getmem1d(c2rdisps,1,nproc,'clm:c2rdisps')
+    call getmem2d(rs2d,jci1,jci2,ici1,ici2,'clm:rs2d')
+    call getmem2d(ra2d,jci1,jci2,ici1,ici2,'clm:ra2d')
+#else
+    if ( lakemod == 1 ) then
+      call getmem3d(lms%eta,1,nnsg,jci1,jci2,ici1,ici2,'lake:eta')
+      call getmem3d(lms%hi,1,nnsg,jci1,jci2,ici1,ici2,'lake:hi')
+      call getmem3d(lms%lakmsk,1,nnsg,jci1,jci2,ici1,ici2,'lake:lakmsk')
+      call getmem4d(lms%tlake,1,nnsg,jci1,jci2,ici1,ici2,1,ndpmax,'lake:tlake')
+    end if
+#endif
+    if ( idcsst == 1 ) then
+      call getmem3d(lms%deltas,1,nnsg,jci1,jci2,ici1,ici2,'sst:deltas')
+      call getmem3d(lms%tdeltas,1,nnsg,jci1,jci2,ici1,ici2,'sst:tdeltas')
+      call getmem3d(lms%tskin,1,nnsg,jci1,jci2,ici1,ici2,'sst:tskin')
+      call getmem3d(lms%sst,1,nnsg,jci1,jci2,ici1,ici2,'sst:sst')
+    end if
+  end subroutine allocate_surface_model
+
+  subroutine init_surface_model
+    use mod_atm_interface
+    use mod_che_interface
+    implicit none
+
+    call cl_setup(lndcomm,mddom%mask,mdsub%mask)
+    call cl_setup(ocncomm,mddom%mask,mdsub%mask,.true.)
+
+#ifdef DEBUG
+    write(ndebug+myid,*) 'TOTAL POINTS FOR LAND  IN LNDCOMM : ', &
+      lndcomm%linear_npoint_sg(myid+1)
+    write(ndebug+myid,*) 'Cartesian p ', lndcomm%cartesian_npoint_g
+    write(ndebug+myid,*) 'Cartesian d ', lndcomm%cartesian_displ_g
+    write(ndebug+myid,*) 'Linear    p ', lndcomm%linear_npoint_g
+    write(ndebug+myid,*) 'Linear    d ', lndcomm%linear_displ_g
+    write(ndebug+myid,*) 'Subgrid Cartesian p ', lndcomm%cartesian_npoint_sg
+    write(ndebug+myid,*) 'Subgrid Cartesian d ', lndcomm%cartesian_displ_sg
+    write(ndebug+myid,*) 'Subgrid Linear    p ', lndcomm%linear_npoint_sg
+    write(ndebug+myid,*) 'Subgrid Linear    d ', lndcomm%linear_displ_sg
+    write(ndebug+myid,*) 'TOTAL POINTS FOR OCEAN IN OCNCOMM : ', &
+      ocncomm%linear_npoint_sg(myid+1)
+    write(ndebug+myid,*) 'Cartesian p ', ocncomm%cartesian_npoint_g
+    write(ndebug+myid,*) 'Cartesian d ', ocncomm%cartesian_displ_g
+    write(ndebug+myid,*) 'Linear    p ', ocncomm%linear_npoint_g
+    write(ndebug+myid,*) 'Linear    d ', ocncomm%linear_displ_g
+    write(ndebug+myid,*) 'Subgrid Cartesian p ', ocncomm%cartesian_npoint_sg
+    write(ndebug+myid,*) 'Subgrid Cartesian d ', ocncomm%cartesian_displ_sg
+    write(ndebug+myid,*) 'Subgrid Linear    p ', ocncomm%linear_npoint_sg
+    write(ndebug+myid,*) 'Subgrid Linear    d ', ocncomm%linear_displ_sg
+#endif
+
+    call allocate_mod_bats_internal(lndcomm)
+    call allocate_mod_ocn_internal(ocncomm)
+
+    ntcpl  = nint(cpldt/dtsec)
+    if ( idcsst   == 1 ) ldcsst   = .true.
+    if ( lakemod  == 1 ) llake    = .true.
+    if ( idesseas == 1 ) ldesseas = .true.
+    if ( iseaice  == 1 ) lseaice  = .true.
+    if ( iocncpl  == 1 ) lcoup    = .true.
+    call assignpnt(mddom%xlat,lm%xlat)
+    call assignpnt(mddom%xlon,lm%xlon)
+    call assignpnt(mddom%lndcat,lm%lndcat)
+    call assignpnt(mddom%ldmsk,lm%ldmsk)
+    call assignpnt(mddom%iveg,lm%iveg)
+    call assignpnt(mddom%itex,lm%itex)
+    call assignpnt(mddom%ht,lm%ht)
+    call assignpnt(mddom%snowam,lm%snowam)
+    call assignpnt(mddom%smoist,lm%smoist)
+    call assignpnt(mddom%rmoist,lm%rmoist)
+    call assignpnt(mdsub%xlat,lm%xlat1)
+    call assignpnt(mdsub%xlon,lm%xlon1)
+    call assignpnt(mdsub%lndcat,lm%lndcat1)
+    call assignpnt(mdsub%ldmsk,lm%ldmsk1)
+    call assignpnt(mdsub%ht,lm%ht1)
+    call assignpnt(mdsub%iveg,lm%iveg1)
+    call assignpnt(mdsub%itex,lm%itex1)
+    call assignpnt(mdsub%dhlake,lm%dhlake1)
+    call assignpnt(cplmsk,lm%icplmsk)
+#ifdef CLM45
+    call assignpnt(uatm,lm%uatm)
+    call assignpnt(vatm,lm%vatm)
+    call assignpnt(thatm,lm%thatm)
+    call assignpnt(tatm,lm%tatm)
+    call assignpnt(patm,lm%patm)
+    call assignpnt(qvatm,lm%qvatm)
+    call assignpnt(zatm,lm%hgt)
+#else
+    call assignpnt(atms%ubx3d,lm%uatm,kz)
+    call assignpnt(atms%vbx3d,lm%vatm,kz)
+    call assignpnt(atms%th3d,lm%thatm,kz)
+    call assignpnt(atms%tb3d,lm%tatm,kz)
+    call assignpnt(atms%pb3d,lm%patm,kz)
+    call assignpnt(atms%qxb3d,lm%qvatm,kz,iqv)
+    call assignpnt(atms%za,lm%hgt,kz)
+#endif
+    call assignpnt(atms%rhox2d,lm%rhox)
+    call assignpnt(atms%ps2d,lm%sfps)
+    call assignpnt(atms%tp3d,lm%sfta,kz)
+    call assignpnt(sfs%hfx,lm%hfx)
+    call assignpnt(sfs%qfx,lm%qfx)
+    call assignpnt(sfs%uvdrag,lm%uvdrag)
+    call assignpnt(sfs%ustar,lm%ustar)
+    call assignpnt(sfs%zo,lm%zo)
+    call assignpnt(sfs%rhoa,lm%rhoa)
+    call assignpnt(sfs%tgbb,lm%tgbb)
+    call assignpnt(sfs%tga,lm%tground1)
+    call assignpnt(sfs%tgb,lm%tground2)
+    call assignpnt(zpbl,lm%hpbl)
+    call assignpnt(pptc,lm%cprate)
+    call assignpnt(pptnc,lm%ncprate)
+    call assignpnt(coszrs,lm%zencos)
+    call assignpnt(fsw,lm%rswf)
+    call assignpnt(flw,lm%rlwf)
+    call assignpnt(flwd,lm%dwrlwf)
+    call assignpnt(sabveg,lm%vegswab)
+    call assignpnt(albvl,lm%lwalb)
+    call assignpnt(albvs,lm%swalb)
+    call assignpnt(aldirs,lm%swdiralb)
+    call assignpnt(aldifs,lm%swdifalb)
+    call assignpnt(aldirl,lm%lwdiralb)
+    call assignpnt(aldifl,lm%lwdifalb)
+    call assignpnt(solis,lm%solar)
+    call assignpnt(emiss,lm%emissivity)
+    call assignpnt(sinc,lm%solinc)
+    call assignpnt(solvs,lm%swdir)
+    call assignpnt(solvsd,lm%swdif)
+    call assignpnt(solvl,lm%lwdir)
+    call assignpnt(solvld,lm%lwdif)
+    call assignpnt(sdelq,lm%deltaq)
+    call assignpnt(sdelt,lm%deltat)
+    if ( ichem == 1 ) then
+      call assignpnt(sdelt,lm%deltat)
+      call assignpnt(sdelq,lm%deltaq)
+      call assignpnt(ssw2da,lm%ssw2da)
+      call assignpnt(sfracv2d,lm%sfracv2d)
+      call assignpnt(sfracb2d,lm%sfracb2d)
+      call assignpnt(sfracs2d,lm%sfracs2d)
+      call assignpnt(svegfrac2d,lm%svegfrac2d)
+      call assignpnt(sxlai2d,lm%sxlai2d)
+      call assignpnt(wetdepflx,lm%wetdepflx)
+      call assignpnt(drydepflx,lm%drydepflx)
+      call assignpnt(idusts,lm%idust)
+    end if
+    if ( iocncpl == 1 .or. iwavcpl == 1) then
+      call assignpnt(dailyrnf,lm%dailyrnf)
+    end if
+#ifdef CLM
+    allocate(landmask(jx,iy))
+#endif
+  end subroutine init_surface_model
+
+  subroutine initialize_surface_model
+    use mod_atm_interface , only : mddom
+    !use mod_ncio
+    implicit none
+#ifdef CLM
+    integer(ik4) :: i , j , n
+#endif
+#ifndef CLM45
+    call initbats(lm,lms)
+#else
+    call initclm45(lm,lms)
+    write(stdout,*)'---------------initialize clm45 finish----------------'
+#endif
+    call initocn(lm,lms)
+    write(stdout,*) '---------------initialize ocean finish----------------'
+#ifdef CLM
+    call initclm(lm,lms)
+    if ( ktau == 0 .and. imask == 2 ) then
+      ! CLM may have changed the landuse again !
+      do i = ici1 , ici2
+        do j = jci1 , jci2
+          lm%iveg(j,i) = nint(lm%lndcat(j,i))
+        end do
+      end do
+      ! Correct land/water misalign : set to short grass
+      where ( (lm%iveg == 14 .or. lm%iveg == 15) .and. lm%ldmsk == 1 )
+        lm%iveg = 2
+        lm%lndcat = d_two
+      end where
+      do i = ici1 , ici2
+        do j = jci1 , jci2
+          do n = 1 , nnsg
+            lm%iveg1(n,j,i) = lm%iveg(j,i)
+            lm%lndcat1(n,j,i) = lm%lndcat(j,i)
+          end do
+        end do
+      end do
+    end if
+#endif
+    lm%emissivity = sum(lms%emisv,1) * rdnnsg
+    write(stdout,*) '........................yibs initialize begin...................'
+    call read_yibs_driver(lms%vlai,lms%vfrac,&
+                       lms%vlandf,lms%vheight,lms%vlaix,&
+                       lms%frac_isl,lms%mvegid,&
+                       lms%vcrop,lms%crop_cal,lms%soil_c,&
+                       lms%stext,lms%clmfrac,lms%clmlai,lms%clmhit,lms%cpool)
+    call yibs_initialize(lm,lms)   !!! xiaoxie 2017
+
+  end subroutine initialize_surface_model
+
+  subroutine surface_model
+#ifdef CLM45
+    use mod_atm_interface , only : atms,sfs,atm1,sdelt
+    use mod_che_interface , only : chia
+    use mod_che_common , only : cpsb
+#endif
+    use mod_atm_interface , only : mddom
+!    use mod_output
+    implicit none
+    type(rcm_time_and_date) :: tempdate
+    type(rcm_time_interval) :: intmdlyibs    
+    integer(ik4) :: i , j , n , nn , ierr , i1 , i2
+    integer(ik4) :: iyibs ,iyear,iyibshour,itemp,itimes  !!!! xiaoxie 2018
+    integer(ik4) :: lyear , lmonth , lday , lhour, lmonthold
+!    real(rk8) , pointer , dimension(:,:,:,:) :: yibschia
+#ifdef CLM45
+    real(rkx) :: tm , dz , dlnp , z1 , z2 , w1 , w2
+#endif
+    integer(ik4) :: totsize(12)
+    integer(ik4) , dimension(12) :: mlen
+    data mlen /31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31/
+    DATA totsize /744,672,744,720,744,720,744,744,720,744,720,744/
+#ifdef CLM
+    
+!    call getmem4d(yibschia,jce1ga,jce2ga,ice1ga,ice2ga, &
+!                         1,kz,1,ntr,'che_common:chia')
+!    yibschia=chia
+    if ( ktau == 0 .or. mod(ktau+1,ntrad) == 0 ) then
+      r2cdoalb = .true.
+    else
+      r2cdoalb = .false.
+    end if
+    ! Timestep used is the same as for bats
+    if ( ktau == 0 ) then
+      r2cnstep = 0
+    else
+      r2cnstep = int((ktau+1)/ntsrf,ik4)
+    end if
+    call mtrxclm(lm,lms)
+#else
+#ifdef CLM45
+    do i = ici1 , ici2
+      do j = jci1 , jci2
+        zatm(j,i) = atms%za(j,i,kz)
+        patm(j,i) = atms%pb3d(j,i,kz)
+        tatm(j,i) = atms%tb3d(j,i,kz)
+        thatm(j,i) = atms%th3d(j,i,kz)
+        uatm(j,i) = atms%ubx3d(j,i,kz)
+        vatm(j,i) = atms%vbx3d(j,i,kz)
+        qvatm(j,i) = atms%qxb3d(j,i,kz,iqv)
+        if ( zatm(j,i) < 35.0 ) then
+          zatm(j,i) = 35.0_rkx
+          dz = zatm(j,i) - atms%za(j,i,kz)
+          tm = d_half*(atms%tb3d(j,i,kz)+atms%tb3d(j,i,kzm1))
+          dlnp = ((egrav*dz)/(rgas*tm))
+          z1 = atms%za(j,i,kz)
+          z2 = atms%za(j,i,kzm1)
+          w1 = (z2-35.0_rkx)/(z2-z1)
+          w2 = d_one - w1
+          tatm(j,i) = atms%tb3d(j,i,kz)*w1 + atms%tb3d(j,i,kzm1)*w2
+          thatm(j,i) = atms%th3d(j,i,kz)*w1 + atms%th3d(j,i,kzm1)*w2
+          uatm(j,i) = atms%ubx3d(j,i,kz)*w1 + atms%ubx3d(j,i,kzm1)*w2
+          vatm(j,i) = atms%vbx3d(j,i,kz)*w1 + atms%vbx3d(j,i,kzm1)*w2
+          qvatm(j,i) = atms%qxb3d(j,i,kz,iqv)*w1 + atms%qxb3d(j,i,kzm1,iqv)*w2
+          patm(j,i) = atms%pb3d(j,i,kz)*exp(-dlnp)
+        end if
+      end do
+    end do
+    call runclm45(lm,lms)
+    !coupling of biogenic VOC from CLM45 to chemistry
+    if ( ichem == 1 ) then
+      do n = 1 , ntr
+        do i = ici1 , ici2
+          do j = jci1 , jci2
+            cvoc_em_clm(j,i,n) = sum(lms%vocemiss(:,j,i,n),1) * rdnnsg
+            cdep_vels_clm(j,i,n) = sum(lms%drydepvels(:,j,i,n),1) * rdnnsg
+          end do
+        end do
+      end do
+      do n = 1 , 4
+        do i = ici1 , ici2
+          do j = jci1 , jci2
+            cdustflx_clm(j,i,n) = sum(lms%dustemiss(:,j,i,n),1) * rdnnsg
+          end do
+        end do
+      end do
+    end if
+#else
+    call vecbats(lm,lms)
+#endif
+#endif
+    call vecocn(lm,lms)
+
+    ! Fill land part of this output vars
+    do n = 1 , nnsg
+      do i = ici1, ici2
+        do j = jci1 , jci2
+          if ( lm%ldmsk1(n,j,i) > 0 ) then
+            lms%rhoa(n,j,i) = lms%sfcp(n,j,i)/(rgas*lms%t2m(n,j,i))
+            lms%ustar(n,j,i) = sqrt(sqrt( &
+                                  (lms%u10m(n,j,i)*lms%drag(n,j,i))**2 + &
+                                  (lms%v10m(n,j,i)*lms%drag(n,j,i))**2) / &
+                                  lms%rhoa(n,j,i))
+          end if
+        end do
+      end do
+    end do
+
+    lm%hfx = sum(lms%sent,1)*rdnnsg
+    lm%qfx = sum(lms%evpr,1)*rdnnsg
+    lm%uvdrag = sum(lms%drag,1)*rdnnsg
+    lm%ustar = sum(lms%ustar,1)*rdnnsg
+    lm%zo = sum(lms%zo,1)*rdnnsg
+    lm%rhoa = sum(lms%rhoa,1)*rdnnsg
+    lm%tgbb = sum(lms%tgbb,1)*rdnnsg
+    lm%tground1 = sum(lms%tgrd,1)*rdnnsg
+    lm%tground2 = sum(lms%tgrd,1)*rdnnsg
+    lm%emissivity = sum(lms%emisv,1) * rdnnsg
+    if ( iseaice == 1 .or. lakemod == 1 ) then
+      do i = ici1 , ici2
+        do j = jci1 , jci2
+          if ( lm%ldmsk(j,i) /= 1 ) then
+            i1 = count(lm%ldmsk1(:,j,i) == 0)
+            i2 = count(lm%ldmsk1(:,j,i) == 2)
+            if ( i1 > i2 ) then
+              lm%ldmsk(j,i) = 0
+            else
+              lm%ldmsk(j,i) = 2
+            end if
+          end if
+        end do
+      end do
+    end if
+    if ( ichem == 1 ) then
+      lm%deltat = sum(lms%deltat,1)*rdnnsg
+      lm%deltaq = sum(lms%deltaq,1)*rdnnsg
+      lm%sfracv2d = sum(lms%sigf,1)*rdnnsg
+      lm%svegfrac2d = sum(lms%lncl,1)*rdnnsg
+      lm%sxlai2d = sum(lms%xlai,1)*rdnnsg
+      lm%sfracb2d = sum(((d_one-lms%lncl)*(d_one-lms%scvk)),1)*rdnnsg
+      lm%sfracs2d = sum((lms%lncl*lms%wt+(d_one-lms%lncl)*lms%scvk),1)*rdnnsg
+      ! FAB here take humidity of first soil layer, sw should be always defined
+      lm%ssw2da = sum(lms%tsw(:,:,:),1)*rdnnsg
+    end if
+
+ !!!! xiaoxie added for yibs running start
+ ! if ( ktau .eq. 0 ) then 
+ ! if ( ktau .lt. 0 ) then  !!! no spin-up
+ !   tempdate = idatex
+ !   intmdlyibs = rcm_time_interval(86400,usec)
+ !   lmonthold = 0
+!
+!    do iyear = 1, 20
+!    do itimes = 1, 365 !365      
+!     call split_idate(idatex,lyear,lmonth,lday,lhour)
+! 
+!     !itemp = (lday-1)*24 + lhour + 1
+!     
+!     !if ( myid == italk ) then
+!     ! write(stdout,*) 'YIBS spinup:', lyear,lmonth,lday,itemp
+!     !end if
+! 
+!     if(lmonth.ne.lmonthold) then    
+!     !call read_yibs_data(lms%ystmp,lms%ysmq,lms%ysifc,lmonth,totsize(lmonth))  
+!     call read_spinup_data(lms%ycosz,lms%ych,lms%ytaf,lms%yqaf,lms%ytas,&
+!                              lms%yuas,lms%yvas,lms%ypard,lms%yparf,lms%yfwet,&
+!                              lms%ystmp,lms%ysmq,lms%ysifc,lmonth,totsize(lmonth))                                 
+!     lmonthold = lmonth
+!     itemp = 1
+!     end if 
+!     do iyibshour = 1, 24
+!     !if ( myid == italk ) then
+!     ! write(stdout,*) 'YIBS spinup:', lyear,lmonth,lday,lmonthold,itemp
+!     !end if      
+!     do i = ici1 , ici2
+!       do j = jci1 , jci2
+!         do n = 1, 10
+!          srf_stm_out(j,i,n)  = lms%ystmp(j,i,n,itemp)   
+!          srf_sq_out(j,i,n)   = lms%ysmq(j,i,n,itemp)     
+!          srf_sif_out(j,i,n)  = lms%ysifc(j,i,n,itemp)  
+!         end do 
+!          srf_ch_out(j,i,1)   = lms%ych(j,i,itemp)  
+!          srf_tcn_out(j,i,1)  = lms%ytaf(j,i,itemp)   
+!          srf_qcn_out(j,i,1)  = lms%yqaf(j,i,itemp)   
+!          srf_t2m_out(j,i,1)  = lms%ytas(j,i,itemp)   
+!          srf_u10m_out(j,i,1) = lms%yuas(j,i,itemp)    
+!          srf_v10m_out(j,i,1) = lms%yvas(j,i,itemp)    
+!          srf_pard_out(j,i,1) = lms%ypard(j,i,itemp)    
+!          srf_parf_out(j,i,1) = lms%yparf(j,i,itemp)    
+!          srf_fwt_out(j,i,1)  = lms%yfwet(j,i,itemp)   
+!          srf_cosz_out(j,i,1) = lms%ycosz(j,i,itemp)           
+!       end do
+!     end do
+!     itemp = itemp + 1
+!     do iyibs = 1, 6 !!! for dtsrf = 600s that is 6 times per hour
+!     !print*,"here in read data 11",iyibs,lyear,lmonth,lday
+!     call yibs(lm,lms,sfs,cpsb,lyear,lmonth,lday)  !!! xiaoxie 2017
+!     !print*,"here in read data 22",iyibs,lyear,lmonth,lday
+!     if ( associated(srfyibs_co2flux_out) ) &
+!       srfyibs_co2flux_out = srfyibs_co2flux_out + co2flux
+!     if ( associated(srfyibs_npp_out) ) &
+!       srfyibs_npp_out = srfyibs_npp_out + npp
+!     if ( associated(srfyibs_gpp_out) ) &
+!       srfyibs_gpp_out = srfyibs_gpp_out + gpp
+!     if ( associated(srf_Rauto_out) ) &
+!       srfyibs_Rauto_out = srfyibs_Rauto_out + R_auto
+!     if ( associated(srfyibs_lai_out) ) &
+!       srfyibs_lai_out = srfyibs_lai_out + lai0
+!     end do
+!     end do     
+!     call output_new    
+!     idatex = idatex + intmdlyibs
+!    end do
+!    end do
+!    idatex = tempdate
+!  end if
+
+  if ( ktau .ge. 0 ) then 
+  call split_idate(idatex,lyear,lmonth,lday,lhour)
+  !!!itemp = lday + sum(mlen(1:lmonth-1))
+  !itemp = (lday-1)*24 + lhour + 1   
+  !if ( myid == italk ) then
+  ! write(stdout,*) 'YIBS spinup:', lyear,lmonth,lday,lhour,itemp
+  !end if
+
+  !if(lmonth.ne.lmonthold) then    
+  !call read_yibs_data(lms%ystmp,lms%ysmq,lms%ysifc,lmonth,totsize(lmonth))                                  
+  !lmonthold = lmonth
+  !end if
+        
+  !do i = ici1 , ici2
+  !  do j = jci1 , jci2
+  !    do n = 1, 6
+  !     srf_stm_out(j,i,n)  = lms%ystmp(j,i,n,itemp)   
+  !     srf_sq_out(j,i,n)   = lms%ysmq(j,i,n,itemp)     
+  !     srf_sif_out(j,i,n)  = lms%ysifc(j,i,n,itemp)  
+  !    end do           
+  !  end do
+  !end do  
+
+  call yibs(lm,lms,sfs,cpsb,lyear,lmonth,lday)  !!! xiaoxie 2017
+  forall (i=ice1:ice2)
+  where (isnan(co2flux(:,i)))
+  co2flux(:,i)=0.
+  end where
+  end forall
+  yco2flux=co2flux  !!! xiaoxie 2017
+  endif
+ !!!! xiaoxie added for yibs running end
+    call collect_output
+#ifdef DEBUG
+    ! Sanity check of surface temperatures
+    ierr = 0
+    do i = ici1 , ici2
+      do j = jci1 , jci2
+        do n = 1 , nnsg
+          if ( lms%tgrd(n,j,i) < 150.0_rkx ) then
+            write(stderr,*) 'Likely error: Surface temperature too low'
+            write(stderr,*) 'MYID = ', myid
+            write(stderr,*) 'J    = ',j
+            write(stderr,*) 'I    = ',i
+            do nn = 1 , nnsg
+              write(stderr,*) 'N    = ',nn
+              write(stderr,*) 'VAL  = ',lms%tgrd(nn,j,i)
+              write(stderr,*) 'MASK = ',lm%ldmsk1(n,j,i)
+            end do
+            write(stderr,*) 'VAL2 = ',lm%tground1(j,i)
+            write(stderr,*) 'VAL2 = ',lm%tground2(j,i)
+            ierr = ierr + 1
+          end if
+        end do
+      end do
+    end do
+    if ( ierr /= 0 ) then
+      call fatal(__FILE__,__LINE__,'TEMP CHECK ERROR')
+    end if
+#endif
+  end subroutine surface_model
+
+  subroutine surface_albedo
+    implicit none
+#ifdef CLM
+    logical :: do_call_albedo_bats_for_clm = .false.
+    if ( do_call_albedo_bats_for_clm ) then
+      call albedobats(lm,lms)
+    else
+      call albedoclm(lm,lms)
+    end if
+#else
+#ifdef CLM45
+    call albedoclm45(lm,lms)
+#else
+    call albedobats(lm,lms)
+#endif
+#endif
+    call albedoocn(lm,lms)
+    lm%swalb = sum(lms%swalb,1)*rdnnsg
+    lm%lwalb = sum(lms%lwalb,1)*rdnnsg
+    lm%swdiralb = sum(lms%swdiralb,1)*rdnnsg
+    lm%lwdiralb = sum(lms%lwdiralb,1)*rdnnsg
+    lm%swdifalb = sum(lms%swdifalb,1)*rdnnsg
+    lm%lwdifalb = sum(lms%lwdifalb,1)*rdnnsg
+  end subroutine surface_albedo
+
+  subroutine export_data_from_surface(expfie)
+    implicit none
+    type(exp_data) , intent(inout) :: expfie
+    integer(ik4) :: j , i
+    do i = ici1 , ici2
+      do j = jci1 , jci2
+        expfie%psfc(j,i) = lm%sfps(j,i)*d_r100
+        expfie%tsfc(j,i) = sum(lms%t2m(:,j,i))*rdnnsg
+        expfie%qsfc(j,i) = sum(lms%q2m(:,j,i))*rdnnsg
+        expfie%swrd(j,i) = lm%rswf(j,i)
+        expfie%lwrd(j,i) = lm%rlwf(j,i)
+        expfie%dlwr(j,i) = lm%dwrlwf(j,i)
+        expfie%dswr(j,i) = lm%swdif(j,i)+lm%swdir(j,i)
+        expfie%lhfx(j,i) = sum(lms%evpr(:,j,i))*rdnnsg*wlhv
+        expfie%shfx(j,i) = sum(lms%sent(:,j,i))*rdnnsg
+        expfie%prec(j,i) = sum(lms%prcp(:,j,i))*rdnnsg
+        expfie%wndu(j,i) = sum(lms%u10m(:,j,i))*rdnnsg
+        expfie%wndv(j,i) = sum(lms%v10m(:,j,i))*rdnnsg
+        expfie%taux(j,i) = sum(lms%taux(:,j,i))*rdnnsg
+        expfie%tauy(j,i) = sum(lms%tauy(:,j,i))*rdnnsg
+        expfie%sflx(j,i) = (sum(lms%evpr(:,j,i))-sum(lms%prcp(:,j,i)))*rdnnsg
+        expfie%snow(j,i) = sum(lms%sncv(:,j,i))*rdnnsg
+        expfie%wspd(j,i) = sqrt(expfie%wndu(j,i)**2+expfie%wndv(j,i)**2)
+        expfie%wdir(j,i) = atan2(expfie%wndu(j,i), expfie%wndv(j,i))
+        if (expfie%wdir(j,i) < d_zero) then
+          expfie%wdir(j,i) = expfie%wdir(j,i)+twopi
+        end if
+        expfie%ustr(j,i) = sum(lms%ustar(:,j,i))*rdnnsg
+        expfie%nflx(j,i) = lm%rswf(j,i) - expfie%lhfx(j,i) - &
+                           expfie%shfx(j,i) - lm%rlwf(j,i)
+      end do
+    end do
+    if ( mod(ktau+1,kday) == 0 ) then
+      do i = ici1 , ici2
+        do j = jci1 , jci2
+          if ( lm%ldmsk(j,i) > 0 ) then
+            expfie%rnof(j,i) = lm%dailyrnf(j,i,1)/runoffcount
+            expfie%snof(j,i) = lm%dailyrnf(j,i,2)/runoffcount
+          else
+           expfie%rnof(j,i) = d_zero
+           expfie%snof(j,i) = d_zero
+          end if
+        end do
+      end do
+      runoffcount = d_zero
+      lm%dailyrnf(:,:,:) = d_zero
+    end if
+  end subroutine export_data_from_surface
+!
+  subroutine import_data_into_surface(impfie,ldmskb,wetdry,tol)
+    use mod_atm_interface
+    implicit none
+    type(imp_data) , intent(in) :: impfie
+    real(rkx) , intent(in) :: tol
+    integer(ik4) , pointer , dimension(:,:) , intent(in) :: ldmskb , wetdry
+    integer :: i , j , n
+    logical :: flag = .false.
+    ! real(rkx) :: toth
+    ! real(rkx) , parameter :: href = d_two * iceminh
+    ! real(rkx) , parameter :: steepf = 1.0_rkx
+    ! integer(ik4) :: ix , jy , imin , imax , jmin , jmax , srad , hveg(22)
+    !
+    !-----------------------------------------------------------------------
+    ! Retrieve information from OCN component
+    !-----------------------------------------------------------------------
+    !
+    do i = ici1, ici2
+      do j = jci1, jci2
+        if ( lm%iveg(j,i) == 14 .or. lm%iveg(j,i) == 15 ) then
+          !
+          !--------------------------------------
+          ! Update: Sea Surface Temperature (SST)
+          !--------------------------------------
+          !
+          if ( impfie%sst(j,i) < tol ) then
+            ! create fixed coupling mask
+            if ( mod(ktau+1, ntcpl*2) == 0 ) then
+              cplmsk(j,i) = 1
+            end if
+            lm%tground1(j,i) = impfie%sst(j,i)
+            lm%tground2(j,i) = impfie%sst(j,i)
+            lm%tgbb(j,i)     = impfie%sst(j,i)
+            lms%tgrd(:,j,i)  = impfie%sst(j,i)
+            lms%tgbrd(:,j,i) = impfie%sst(j,i)
+            lms%tgbb(:,j,i)  = impfie%sst(j,i)
+          end if
+          !
+          !----------------------------------------------------------
+          ! Update: Mask and land-use type (based on dynamic wet-dry)
+          !----------------------------------------------------------
+          !
+!         if (importFields%msk(j,i) .lt. tol .and. ldmskb(j,i) == 0) then
+!           if (importFields%msk(j,i) .lt. 1.0) then
+!             flag = .false.
+!             if (lm%ldmsk(j,i) == 0 .or. &
+!                 lm%ldmsk(j,i) == 2) flag = .true.
+!             ! set land-sea mask
+!             lm%ldmsk(j,i) = 1
+!             do n = 1, nnsg
+!               lm%ldmsk1(n,j,i) = lm%ldmsk(j,i)
+!             end do
+!             ! count land-use type in a specified search radius (srad)
+!             srad = 10
+!             jmin = j-srad
+!             if (j-srad < jci1) jmin = jci1
+!             jmax = j+srad
+!             if (j+srad > jci2) jmax = jci2
+!             imin = i-srad
+!             if (i-srad < ici1) imin = ici1
+!             imax = i+srad
+!             if (i+srad > ici2) imax = ici2
+!             hveg = 0
+!             do ix = imin, imax
+!               do jy = jmin, jmax
+!                 do n = 1, nnsg
+!                   hveg(iveg1(n,jy,ix)) = hveg(iveg1(n,jy,ix))+1
+!                 end do
+!               end do
+!             end do
+!             hveg(14) = 0
+!             hveg(15) = 0
+!             ! set array to store change
+!             wetdry(j,i) = 1
+!             ! write debug info
+!             if (flag) then
+!               write(*,20) j, i, 'water', 'land ', lm%ldmsk(j,i)
+!             end if
+!           else
+!             if (lm%ldmsk(j,i) == 1 .and. wetdry(j,i) == 1) then
+!               flag = .false.
+!               if (lm%ldmskb(j,i) /= lm%ldmsk(j,i)) flag = .true.
+!               ! set land-sea mask to its original value
+!               lm%ldmsk(j,i) = ldmskb(j,i)
+!               do n = 1, nnsg
+!                 lm%ldmsk1(n,j,i) = lm%ldmsk(j,i)
+!               end do
+!               ! set array to store change
+!               wetdry(j,i) = 0
+!               ! write debug info
+!               if (flag) then
+!                 write(*,20) j, i, 'land ', 'water', lm%ldmsk(j,i)
+!               end if
+!             end if
+!           end if
+!         end if
+          !
+          !------------------------------------------------------------------
+          ! Update: Sea-ice, mask and land-use type (based on sea-ice module)
+          !------------------------------------------------------------------
+          !
+          if ( impfie%sit(j,i) < tol .and. lm%ldmsk(j,i) /= 1 ) then
+            if ( impfie%sit(j,i) > iceminh ) then
+              flag = .false.
+              if ( lm%ldmsk(j,i) == 0 ) flag = .true.
+              ! set land-sea mask
+              lm%ldmsk(j,i) = 2
+              do n = 1, nnsg
+                lm%ldmsk1(n,j,i) = 2
+                ! set sea ice thikness (in meter)
+                lms%sfice(n,j,i) = impfie%sit(j,i)
+              end do
+              ! write debug info
+              if ( flag ) then
+                write(*,30) j, i, 'water', 'ice  ', &
+                   lm%ldmsk(j,i), lms%sfice(1,j,i)
+              end if
+            else
+              if ( ldmskb(j,i) == 0 .and. lm%ldmsk(j,i) == 2 ) then
+                do n = 1, nnsg
+                  ! reduce to one tenth surface ice: it should melt away
+                  lms%sfice(n,j,i) = lms%sfice(n,j,i)*d_r10
+                  ! check that sea ice is melted or not
+                  if ( lms%sfice(n,j,i) <= iceminh ) then
+                    if ( ldmskb(j,i) /= lm%ldmsk(j,i) ) flag = .true.
+                    ! set land-sea mask to its original value
+                    lm%ldmsk(j,i) = ldmskb(j,i)
+                    lm%ldmsk1(n,j,i) = ldmskb(j,i)
+                    ! set land-use type to its original value
+                    ! set sea ice thikness (in meter)
+                    lms%sfice(n,j,i) = d_zero
+                  else
+                    flag = .false.
+                  end if
+                end do
+                ! write debug info
+                if ( flag ) then
+                  write(*,40) j, i, 'ice  ', 'water',  &
+                    lm%ldmsk(j,i), lms%sfice(1,j,i)
+                end if
+              end if
+            end if
+          end if
+        end if
+      end do
+    end do
+    !
+    !-----------------------------------------------------------------------
+    ! Retrieve information from WAV component
+    !-----------------------------------------------------------------------
+    !
+    do i = ici1, ici2
+      do j = jci1, jci2
+        if ( lm%iveg(j,i) == 14 .or. lm%iveg(j,i) == 15 ) then
+          !
+          !--------------------------------------
+          ! Update: Surface roughness
+          !--------------------------------------
+          !
+          if ( impfie%zo(j,i) < tol ) then
+            lm%zo(j,i) = impfie%zo(j,i)
+          else
+            lm%zo(j,i) = 1.0e20
+          end if
+          !
+          !--------------------------------------
+          ! Update: Friction velocity
+          !--------------------------------------
+          !
+          if ( impfie%ustar(j,i) < tol ) then
+            lm%ustar(j,i) = impfie%ustar(j,i)
+          else
+            lm%ustar(j,i) = 1.0e20
+          end if
+        end if
+      end do
+    end do
+    !
+    !-----------------------------------------------------------------------
+    ! Format definition
+    !-----------------------------------------------------------------------
+    !
+! 20 format(' ATM land-sea mask is changed at (',I3,',',I3,') : ',     &
+!             A5,' --> ',A5,' [',I2,']')
+ 30 format(' ATM sea-ice is formed at (',I3,',',I3,') : ',            &
+             A5,' --> ',A5,' [',I2,' - ',F12.4,']')
+ 40 format(' ATM sea-ice is melted at (',I3,',',I3,') : ',       &
+             A5,' --> ',A5,' [',I2,' - ',F12.4,']')
+  end subroutine import_data_into_surface
+
+  subroutine collect_output
+    implicit none
+#ifndef CLM
+    integer(ik4) :: k
+#endif
+    integer(ik4) :: i , j , n
+    real(rkx) :: qas , tas , ps , qs
+
+    ! Fill accumulators
+
+    if ( ktau > 0 ) then
+      if ( ifatm ) then
+        if ( associated(atm_tgb_out) ) &
+          atm_tgb_out = atm_tgb_out + sum(lms%tgrd,1)*rdnnsg
+        if ( associated(atm_tsw_out) ) &
+          atm_tsw_out = atm_tsw_out + sum(lms%tsw,1)*rdnnsg
+      end if
+      if ( ifsrf ) then
+!!!!! xiaoxie add for yibs !!! 
+!!!!! varibles listed below are averaged values !!!!!
+!!!!! yibs outputs     
+        if ( associated(srf_co2flux_out) ) &
+          srf_co2flux_out = srf_co2flux_out + co2flux
+        if ( associated(srf_npp_out) ) &
+          srf_npp_out = srf_npp_out + npp
+        if ( associated(srf_gpp_out) ) &
+          srf_gpp_out = srf_gpp_out + gpp
+        if ( associated(srf_swd_out) ) &
+          srf_swd_out = srf_swd_out + sum(lms%parsun_z,1)*rdnnsg
+        if ( associated(srf_swf_out) ) &
+          srf_swf_out = srf_swf_out + sum(lms%parsha_z,1)*rdnnsg
+        if ( associated(srf_Rauto_out) ) &
+          srf_Rauto_out = srf_Rauto_out + R_auto
+        !if ( associated(srf_soilresp_out) ) &
+        !  srf_soilresp_out = srf_soilresp_out + soilresp
+        if ( associated(srf_lai_out) ) &
+          srf_lai_out = srf_lai_out + lai0
+
+!!!!! yibs debug values  
+!!!!! below is disabled srf2d 35-48       
+        if ( associated(srf_TairC_out) ) &
+          srf_TairC_out = srf_TairC_out + TairC
+        if ( associated(srf_TcanopyC_out) ) &
+          srf_TcanopyC_out = srf_TcanopyC_out + TcanopyC
+        if ( associated(srf_Qf_out) ) &
+          srf_Qf_out = srf_Qf_out + Qf
+        if ( associated(srf_P_mbar_out) ) &
+          srf_P_mbar_out = srf_P_mbar_out + P_mbar
+        if ( associated(srf_Ca_out) ) &
+          srf_Ca_out = srf_Ca_out + CA
+        if ( associated(srf_yCh_out) ) &
+          srf_yCh_out = srf_yCh_out + CH
+        if ( associated(srf_U_out) ) &
+          srf_U_out = srf_U_out + U
+        if ( associated(srf_IPARdir_out) ) &
+          srf_IPARdir_out = srf_IPARdir_out + IPARdir
+        if ( associated(srf_IPARdif_out) ) &
+          srf_IPARdif_out = srf_IPARdif_out + IPARdiF
+        if ( associated(srf_o3c_out) ) &
+          srf_o3c_out = srf_o3c_out + O3C
+        if ( associated(srf_elev_out) ) &
+          srf_elev_out = srf_elev_out + elev
+        if ( associated(srf_inlat_out) ) &
+          srf_inlat_out = srf_inlat_out + in_lat
+        if ( associated(srf_plant_out) ) &
+          srf_plant_out = srf_plant_out + in_plant
+        if ( associated(srf_harvest_out) ) &
+          srf_harvest_out = srf_harvest_out + in_harvest        
+!!!!! below is disabled srf3d 18-21 
+        if ( associated(srf_soilt_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_soilt_out(:,:,n) = &
+              srf_soilt_out(:,:,n) + soilt(:,:,n)
+            elsewhere
+              srf_soilt_out(:,:,n) = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_soilm_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_soilm_out(:,:,n) = &
+              srf_soilm_out(:,:,n) + soilm(:,:,n)
+            elsewhere
+              srf_soilm_out(:,:,n) = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_soilp_out) ) then
+          !do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+        srf_soilp_out(:,:,1) =srf_soilp_out(:,:,1) +Carb_tot(:,:)
+        srf_soilp_out(:,:,2) =srf_soilp_out(:,:,2) +Carb_soil(:,:)
+        srf_soilp_out(:,:,3) =srf_soilp_out(:,:,3) +coszen(:,:)
+        srf_soilp_out(:,:,4) =srf_soilp_out(:,:,4) +vegfrac(:,:)
+        srf_soilp_out(:,:,5) =srf_soilp_out(:,:,5) +ci(:,:)
+        srf_soilp_out(:,:,6) =srf_soilp_out(:,:,6) +gcanopy(:,:)
+        srf_soilp_out(:,:,7) =srf_soilp_out(:,:,7) +o3s(:,:)
+        srf_soilp_out(:,:,8) =srf_soilp_out(:,:,8) +ht_p(:,:)
+        srf_soilp_out(:,:,9) =srf_soilp_out(:,:,9) +lai_p(:,:)
+        srf_soilp_out(:,:,10)=srf_soilp_out(:,:,10)+phenpfts(:,:,9)
+            elsewhere
+              srf_soilp_out(:,:,1) = dmissval
+              srf_soilp_out(:,:,2) = dmissval
+              srf_soilp_out(:,:,3) = dmissval
+              srf_soilp_out(:,:,4) = dmissval
+              srf_soilp_out(:,:,5) = dmissval
+              srf_soilp_out(:,:,6) = dmissval
+              srf_soilp_out(:,:,7) = dmissval
+              srf_soilp_out(:,:,8) = dmissval
+              srf_soilp_out(:,:,9) = dmissval
+              srf_soilp_out(:,:,10) = dmissval            
+            end where
+          !end do
+        end if
+        if ( associated(srf_soili_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_soili_out(:,:,n) =srf_soili_out(:,:,n)+soili(:,:,n)
+            elsewhere
+              srf_soili_out(:,:,n)  = dmissval
+            end where
+          end do
+        end if
+!!!!! below is enabled srf3d 22-26 
+        if ( associated(srf_inveg_out) ) then  !!!! xiaoxie added debug yibs input
+          do n = 1 , kz
+              srf_inveg_out(:,:,n) = &
+              srf_inveg_out(:,:,n)+in_veg(n,:,:)
+          end do
+        end if
+        if ( associated(srf_inpop_out) ) then
+          do n = 1 , kz
+              srf_inpop_out(:,:,n) = &
+              srf_inpop_out(:,:,n)+in_pop(n,:,:)
+          end do
+        end if
+        if ( associated(srf_inh_out) ) then
+          do n = 1 , kz
+              srf_inh_out(:,:,n)  = &
+              srf_inh_out(:,:,n)+in_h(n,:,:)
+          end do
+        end if
+        if ( associated(srf_indbh_out) ) then
+          do n = 1 , kz
+              srf_indbh_out(:,:,n) = &
+              srf_indbh_out(:,:,n)+in_dbh(n,:,:)
+          end do
+        end if
+        if ( associated(srf_incrad_out) ) then
+          do n = 1 , kz
+              srf_incrad_out(:,:,n) = &
+              srf_incrad_out(:,:,n)+in_crad(n,:,:)
+          end do
+        end if
+!!!!! below is disabled srf3d 27-31
+        if ( associated(srf_intexture_out) ) then
+          do n = 1 , 5
+              srf_intexture_out(:,:,n)  = &
+              srf_intexture_out(:,:,n)+in_texture(n,:,:)
+          end do
+          do n = 6 , kz
+              srf_intexture_out(:,:,n)  = 0.0_rkx
+          end do
+        end if
+        if ( associated(srf_inlai_out) ) then
+          do n = 1 , kz
+              srf_inlai_out(:,:,n) = &
+              srf_inlai_out(:,:,n)+in_lai(n,:,:)
+          end do
+        end if
+        if ( associated(srf_inalbedo_out) ) then
+          do n = 1 , kz
+              srf_inalbedo_out(:,:,n) = &
+              srf_inalbedo_out(:,:,n)+in_albedo(n,:,:)
+          end do
+        end if
+        if ( associated(srf_incpool_out) ) then
+          do n = 1 , kz
+              srf_incpool_out(:,:,n)  = &
+              srf_incpool_out(:,:,n)+in_cpool(n,:,:)
+          end do
+        end if
+        if ( associated(srf_intpool_out) ) then
+          do n = 1 , 16
+              srf_intpool_out(:,:,n) = &
+              srf_intpool_out(:,:,n)+in_tpool(n,:,:)
+          end do
+          do n = 17 , kz
+              srf_intpool_out(:,:,n) = 0.0_rkx
+          end do
+        end if       
+!!!!! varibles listed below are called only for each time step !!!!!           
+        if ( associated(srf_tlef_out) ) then
+          where ( lm%ldmsk > 0 )
+            srf_tlef_out = sum(lms%tlef,1)*rdnnsg
+          elsewhere
+            srf_tlef_out = dmissval
+          end where
+        end if
+        if ( associated(srf_tcn_out) ) then
+          srf_tcn_out(:,:,1) = srf_tlef_out - 273.15
+        end if
+        if ( associated(srf_t2m_out) ) &
+          srf_t2m_out(:,:,1) = sum(lms%t2m,1)*rdnnsg
+        if ( associated(srf_q2m_out) ) &
+          srf_q2m_out(:,:,1) = sum(lms%q2m,1)*rdnnsg
+        if ( associated(srf_u10m_out) ) &
+          srf_u10m_out(:,:,1) = sum(lms%u10m,1)*rdnnsg
+        if ( associated(srf_v10m_out) ) &
+          srf_v10m_out(:,:,1) = sum(lms%v10m,1)*rdnnsg
+        if ( associated(srf_qcn_out) ) &
+          srf_qcn_out(:,:,1) = sum(lms%q2m,1)*rdnnsg
+        if ( associated(srf_pard_out) ) &
+          !srf_pard_out(:,:,1) = sum(lms%parsun_z,1)*rdnnsg
+          srf_pard_out(:,:,1) = lm%swdir + lm%lwdir
+        if ( associated(srf_parf_out) ) &
+          !srf_parf_out(:,:,1) = sum(lms%parsha_z,1)*rdnnsg         
+          srf_parf_out(:,:,1) = lm%swdif + lm%lwdif
+        if ( associated(srf_fwt_out) ) &
+          srf_fwt_out(:,:,1) = sum(lms%fwet,1)*rdnnsg
+        if ( associated(srf_cosz_out) ) &
+          srf_cosz_out(:,:,1) = lm%zencos
+
+        if ( associated(srf_sif_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_sif_out(:,:,n) = sum(lms%ifrac(:,:,:,n),1)*rdnnsg
+            elsewhere
+              srf_sif_out(:,:,n) = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_smp_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_smp_out(:,:,n) = sum(lms%smp(:,:,:,n),1)*rdnnsg
+            elsewhere
+              srf_smp_out(:,:,n) = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_smw_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_smw_out(:,:,n) = sum(lms%sw(:,:,:,n),1)*rdnnsg
+            elsewhere
+              srf_smw_out(:,:,n) = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_sq_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_sq_out(:,:,n)  = sum(lms%soilm(:,:,:,n),1)*rdnnsg
+            elsewhere
+              srf_sq_out(:,:,n)  = dmissval
+            end where
+          end do
+        end if
+        if ( associated(srf_stm_out) ) then
+          do n = 1 , num_soil_layers
+            where ( lm%ldmsk > 0 )
+              srf_stm_out(:,:,n) = sum(lms%sm(:,:,:,n),1)*rdnnsg-273.15
+            elsewhere
+              srf_stm_out(:,:,n) = dmissval
+            end where
+          end do
+        end if  
+
+        if ( associated(srf_ch_out) ) then
+            where ( lm%ldmsk > 0 )
+                srf_ch_out(:,:,1) = sum(lms%gb_mol,1)*rdnnsg
+            elsewhere
+                srf_ch_out(:,:,1) = dmissval
+            end where
+        end if
+!!!!! xiaoxie add for yibs !!!
+
+        if ( associated(srf_evp_out) ) &
+          srf_evp_out = srf_evp_out + lm%qfx
+        if ( associated(srf_tpr_out) ) &
+          srf_tpr_out = srf_tpr_out + sum(lms%prcp,1)*rdnnsg
+        if ( associated(srf_prcv_out) ) &
+          srf_prcv_out = srf_prcv_out + lm%cprate*rtsrf
+        if ( associated(srf_zpbl_out) ) &
+          srf_zpbl_out = srf_zpbl_out + lm%hpbl
+        if ( associated(srf_scv_out) ) &
+          srf_scv_out = srf_scv_out + sum(lms%sncv,1)*rdnnsg
+        if ( associated(srf_sund_out) ) then
+          where( lm%rswf > 120.0_rkx )
+            srf_sund_out = srf_sund_out + dtbat
+          end where
+        end if
+        if ( associated(srf_srunoff_out) ) then
+          srf_srunoff_out = srf_srunoff_out+sum(lms%srnof,1)*rdnnsg
+        end if
+        if ( associated(srf_trunoff_out) ) then
+          srf_trunoff_out = srf_trunoff_out+sum(lms%trnof,1)*rdnnsg
+        end if
+        if ( associated(srf_sena_out) ) then
+          srf_sena_out = srf_sena_out + sum(lms%sent,1)*rdnnsg
+        end if
+        if ( associated(srf_flw_out) ) &
+          srf_flw_out = srf_flw_out + lm%rlwf
+        if ( associated(srf_fsw_out) ) &
+          srf_fsw_out = srf_fsw_out + lm%rswf
+        if ( associated(srf_fld_out) ) &
+          srf_fld_out = srf_fld_out + lm%dwrlwf
+        if ( associated(srf_sina_out) ) &
+          srf_sina_out = srf_sina_out + lm%solinc
+        if ( associated(srf_snowmelt_out) ) &
+          srf_snowmelt_out = srf_snowmelt_out + sum(lms%snwm,1)*rdnnsg
+      end if
+      if ( ifsub ) then
+        call reorder_add_subgrid(lms%sfcp,sub_ps_out)
+        if ( associated(sub_evp_out) ) &
+          call reorder_add_subgrid(lms%evpr,sub_evp_out)
+        if ( associated(sub_scv_out) ) &
+          call reorder_add_subgrid(lms%sncv,sub_scv_out,mask=lm%ldmsk1)
+        if ( associated(sub_sena_out) ) &
+          call reorder_add_subgrid(lms%sent,sub_sena_out)
+        if ( associated(sub_srunoff_out) ) &
+          call reorder_add_subgrid(lms%srnof,sub_srunoff_out,lm%ldmsk1)
+        if ( associated(sub_trunoff_out) ) &
+          call reorder_add_subgrid(lms%trnof,sub_trunoff_out,lm%ldmsk1)
+      end if
+      if ( ifsts ) then
+        if ( associated(sts_tgmax_out) ) &
+          sts_tgmax_out = max(sts_tgmax_out,sum(lms%tgrd,1)*rdnnsg)
+        if ( associated(sts_tgmin_out) ) &
+          sts_tgmin_out = min(sts_tgmin_out,sum(lms%tgrd,1)*rdnnsg)
+        if ( associated(sts_t2max_out) ) &
+          sts_t2max_out(:,:,1) = max(sts_t2max_out(:,:,1),sum(lms%t2m,1)*rdnnsg)
+        if ( associated(sts_t2min_out) ) &
+          sts_t2min_out(:,:,1) = min(sts_t2min_out(:,:,1),sum(lms%t2m,1)*rdnnsg)
+        if ( associated(sts_t2min_out) ) &
+          sts_t2avg_out(:,:,1) = sts_t2avg_out(:,:,1) + sum(lms%t2m,1)*rdnnsg
+        if ( associated(sts_w10max_out) ) &
+          sts_w10max_out(:,:,1) = max(sts_w10max_out(:,:,1), &
+            sqrt(sum((lms%u10m**2+lms%v10m**2),1)*rdnnsg))
+        if ( associated(sts_pcpmax_out) ) &
+          sts_pcpmax_out = max(sts_pcpmax_out,lms%prcp(1,:,:))
+        if ( associated(sts_pcpavg_out) ) &
+          sts_pcpavg_out = sts_pcpavg_out + lms%prcp(1,:,:)
+        if ( associated(sts_psmin_out) ) &
+          sts_psmin_out = min(sts_psmin_out,lm%sfps(jci1:jci2,ici1:ici2))
+        if ( associated(sts_psavg_out) ) &
+          sts_psavg_out = sts_psavg_out + lm%sfps(jci1:jci2,ici1:ici2)
+        if ( associated(sts_srunoff_out) ) &
+          sts_srunoff_out = sts_srunoff_out+sum(lms%srnof,1)*rdnnsg
+        if ( associated(sts_trunoff_out) ) &
+          sts_trunoff_out = sts_trunoff_out+sum(lms%trnof,1)*rdnnsg
+        if ( associated(sts_sund_out) ) then
+          where( lm%rswf > 120.0_rkx )
+            sts_sund_out = sts_sund_out + dtbat
+          end where
+        end if
+      end if
+      if ( iflak ) then
+        if ( associated(lak_tpr_out) ) &
+          lak_tpr_out = lak_tpr_out + sum(lms%prcp,1)*rdnnsg
+        if ( associated(lak_scv_out) ) &
+          lak_scv_out = lak_scv_out + sum(lms%sncv,1)*rdnnsg
+        if ( associated(lak_sena_out) ) &
+          lak_sena_out = lak_sena_out + sum(lms%sent,1)*rdnnsg
+        if ( associated(lak_flw_out) ) &
+          lak_flw_out = lak_flw_out + lm%rlwf
+        if ( associated(lak_fsw_out) ) &
+          lak_fsw_out = lak_fsw_out + lm%rswf
+        if ( associated(lak_fld_out) ) &
+          lak_fld_out = lak_fld_out + lm%dwrlwf
+        if ( associated(lak_sina_out) ) &
+          lak_sina_out = lak_sina_out + lm%solinc
+        if ( associated(lak_evp_out) ) &
+          lak_evp_out = lak_evp_out + sum(lms%evpr,1)*rdnnsg
+      end if
+    end if
+
+    ! Those are for the output, but collected only at POINT in time
+
+    if ( mod(ktau+1,ksrf) == 0 ) then
+
+      if ( ifsrf ) then
+        if ( associated(srf_uvdrag_out) ) &
+          srf_uvdrag_out = sum(lms%drag,1)*rdnnsg
+        if ( associated(srf_ustar_out) ) &
+          srf_ustar_out = sum(lms%ustar,1)*rdnnsg
+        if ( associated(srf_zo_out) ) &
+          srf_zo_out = sum(lms%zo,1)*rdnnsg
+        if ( associated(srf_rhoa_out) ) &
+          srf_rhoa_out = sum(lms%rhoa,1)*rdnnsg
+        if ( associated(srf_tg_out) ) &
+          srf_tg_out = sum(lms%tgbb,1)*rdnnsg
+ 
+        if ( associated(srf_aldirs_out) ) &
+          srf_aldirs_out = lm%swdiralb
+        if ( associated(srf_aldifs_out) ) &
+          srf_aldifs_out = lm%swdifalb
+        if ( associated(srf_seaice_out) ) &
+          srf_seaice_out = sum(lms%sfice,1)*rdnnsg
+        if ( associated(srf_rh2m_out) ) then
+          srf_rh2m_out = d_zero
+          do i = ici1 , ici2
+            do j = jci1 , jci2
+              do n = 1 , nnsg
+                qas = lms%q2m(n,j,i)
+                tas = lms%t2m(n,j,i)
+                ps = lms%sfcp(n,j,i)
+                qs = pfwsat(tas,ps)
+                srf_rh2m_out(j,i,1) = srf_rh2m_out(j,i,1)+(qas/qs)*d_100
+              end do
+            end do
+          end do
+          srf_rh2m_out = srf_rh2m_out * rdnnsg
+        end if
+      end if
+
+      if ( ifsub ) then
+        if ( associated(sub_uvdrag_out) ) &
+          call reorder_subgrid(lms%drag,sub_uvdrag_out)
+        if ( associated(sub_tg_out) ) &
+          call reorder_subgrid(lms%tgbb,sub_tg_out)
+        if ( associated(sub_tlef_out) ) &
+          call reorder_subgrid(lms%tlef,sub_tlef_out,mask=lm%ldmsk1)
+        if ( associated(sub_u10m_out) ) &
+          call reorder_subgrid(lms%u10m,sub_u10m_out)
+        if ( associated(sub_v10m_out) ) &
+          call reorder_subgrid(lms%v10m,sub_v10m_out)
+        if ( associated(sub_t2m_out) ) &
+          call reorder_subgrid(lms%t2m,sub_t2m_out)
+        if ( associated(sub_q2m_out) ) &
+          call reorder_subgrid(lms%q2m,sub_q2m_out)
+        if ( associated(sub_smw_out) ) then
+          call reorder_subgrid(lms%sw,sub_smw_out,lm%ldmsk1)
+        end if
+      end if
+
+#ifndef CLM
+      if ( iflak ) then
+        if ( associated(lak_tg_out) ) &
+          lak_tg_out = sum(lms%tgbb,1)*rdnnsg
+        if ( associated(lak_aldirs_out) ) &
+          lak_aldirs_out = lm%swdiralb
+        if ( associated(lak_aldifs_out) ) &
+          lak_aldifs_out = lm%swdifalb
+        if ( associated(lak_ice_out) ) &
+          lak_ice_out = sum(lms%sfice,1,lms%lakmsk)*rdnnsg
+        if ( associated(lak_tlake_out) ) then
+          do k = 1 , ndpmax
+            lak_tlake_out(:,:,k) = sum(lms%tlake(:,:,:,k),1,lms%lakmsk)*rdnnsg
+          end do
+        end if
+      end if
+#endif
+
+    end if ! IF output time
+
+    if ( iocncpl == 1 .or. iwavcpl == 1 ) then
+      ! Fill for the RTM component
+      lm%dailyrnf(:,:,1) = lm%dailyrnf(:,:,1) + sum(lms%srnof,1)*rdnnsg
+      lm%dailyrnf(:,:,2) = lm%dailyrnf(:,:,2) + &
+        (sum(lms%trnof,1)-sum(lms%srnof,1))*rdnnsg
+      runoffcount = runoffcount + d_one
+    end if
+
+    ! Reset accumulation from precip and cumulus
+    lm%ncprate = d_zero
+    lm%cprate  = d_zero
+
+    ! Reset also accumulation for deposition fluxes
+    if ( ichem == 1 ) then
+      lm%wetdepflx = d_zero
+      lm%drydepflx = d_zero
+    end if
+  end subroutine collect_output
+
+!!! xiaoxie 2017 added
+  subroutine read_yibs_driver(vlai,vfrac,vlandf,vheight,vlaix,frac_isl,&
+                              mvegid,vcrop,crop_cal,soil_c,&
+                              stext,clmfrac,clmlai,clmhit,cpool)
+  use netcdf
+  use mod_runparams
+  use mod_dynparam
+  use mod_ensemble
+  use mod_mpmessage
+  use mod_mppparam
+  use mod_memutil
+  use mod_nchelper
+  use mod_domain
+    implicit none
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: vlai
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: vfrac
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: cpool
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: vlandf
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: vheight
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: vlaix
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: frac_isl
+    integer(rk4) , pointer , dimension(:,:) , intent(inout) :: mvegid
+    real(rkx) , pointer , dimension(:,:) , intent(inout) :: vcrop
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: crop_cal
+    real(rkx) , pointer , dimension(:,:) , intent(inout) :: soil_c
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: stext
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: clmfrac
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: clmlai
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: clmhit
+
+
+    character(len=256) :: dname
+    character(len=8) :: csmoist
+    integer(ik4) :: idmin , ilev
+    integer(ik4) , dimension(2) :: istart , icount
+    integer(ik4) , dimension(3) :: istart3 , icount3
+    integer(ik4) , dimension(4) :: istart4 , icount4
+    real(rkx) , dimension(:,:) , pointer :: tempmoist
+    real(rkx) , dimension(:,:) , pointer :: rspace
+    integer(rk4) , dimension(:,:) , pointer :: irspace
+    real(rkx) , dimension(:,:,:) , pointer :: rspacex
+    real(rkx) , dimension(:,:,:) , pointer :: temprsp
+    logical :: has_snow = .true.
+    logical :: has_dhlake = .true.
+
+    dname = trim(dirter)//pthsep//'yibs_driver.nc'
+    if ( myid == italk ) then
+      write(stdout,*) 'Reading Domain file : ', trim(dname)
+    end if
+
+    !print*,"jci1,jci2,ici1,ici2: ",jci1,jci2,ici1,ici2
+    if ( do_parallel_netcdf_in ) then
+      !print*,"get hete 111111"
+      istart(1) = jci1-1
+      istart(2) = ici1-1
+      icount(1) = jci2-jci1+1
+      icount(2) = ici2-ici1+1
+      allocate(rspace(icount(1),icount(2)))
+      allocate(irspace(icount(1),icount(2)))
+      
+      call openfile_withname(dname,idmin)
+
+      call read_var2d_static(idmin,'mvegid',irspace,istart=istart,icount=icount)
+      mvegid(jci1:jci2,ici1:ici2) = irspace
+      call read_var2d_static(idmin,'cropdata',rspace,istart=istart,icount=icount)
+      vcrop(jci1:jci2,ici1:ici2) = rspace
+      call read_var2d_static(idmin,'soil_c_total',rspace,istart=istart,icount=icount)
+      soil_c(jci1:jci2,ici1:ici2) = rspace
+      
+
+        istart3(1:2) = istart
+        icount3(1:2) = icount
+        icount3(3) = 1
+        do ilev = 1 , 16
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vheight',rspace, &
+                                 istart=istart3,icount=icount3)
+          vheight(jci1:jci2,ici1:ici2,ilev) = rspace
+          call read_var2d_static(idmin,'cpool_restart',rspace, &
+                     istart=istart3,icount=icount3)
+          cpool(jci1:jci2,ici1:ici2,ilev) = rspace          
+          call read_var2d_static(idmin,'vhit_clm',rspace, &
+                                 istart=istart3,icount=icount3)
+          clmhit(jci1:jci2,ici1:ici2,ilev) = rspace
+          call read_var2d_static(idmin,'vlaix',rspace, &
+                                 istart=istart3,icount=icount3)
+          vlaix(jci1:jci2,ici1:ici2,ilev) = rspace
+          call read_var2d_static(idmin,'frac_isl',rspace, &
+                                 istart=istart3,icount=icount3)
+          frac_isl(jci1:jci2,ici1:ici2,ilev) = rspace
+        end do
+        do ilev = 1 , 18
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vfrac',rspace, &
+                                 istart=istart3,icount=icount3)
+          vfrac(jci1:jci2,ici1:ici2,ilev) = rspace
+          call read_var2d_static(idmin,'vfrac_clm',rspace, &
+                                 istart=istart3,icount=icount3)
+          clmfrac(jci1:jci2,ici1:ici2,ilev) = rspace
+        end do
+        do ilev = 1 , 12
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vlandf',rspace, &
+                                 istart=istart3,icount=icount3)
+          vlandf(jci1:jci2,ici1:ici2,ilev) = rspace
+        end do
+        do ilev = 1 , 2
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'crop_cal',rspace, &
+                                 istart=istart3,icount=icount3)
+          crop_cal(jci1:jci2,ici1:ici2,ilev) = rspace
+        end do
+        do ilev = 1 , 5
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'soil_texture',rspace, &
+                                 istart=istart3,icount=icount3)
+          stext(jci1:jci2,ici1:ici2,ilev) = rspace
+        end do
+        
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+        istart4(3) = 1
+        icount4(3) = 16
+        icount4(4) = 1    
+      allocate(rspacex(icount4(1),icount4(2),icount4(3)))        
+        do ilev = 1 , 12
+          istart4(4) = ilev
+          call read_var3d_static(idmin,'laim16',rspacex, &
+                                 istart=istart4,icount=icount4)
+          vlai(jci1:jci2,ici1:ici2,1:16,ilev) = rspacex
+          call read_var3d_static(idmin,'vlai_clm',rspacex, &
+                                 istart=istart4,icount=icount4)
+          clmlai(jci1:jci2,ici1:ici2,1:16,ilev) = rspacex
+        end do        
+
+      call closefile(idmin)
+      deallocate(rspace)
+      deallocate(irspace)
+      deallocate(rspacex)      
+    else
+      if ( myid == iocpu ) then
+      !print*,"get hete 111111222",jx,iy
+        istart(1) = 1
+        istart(2) = 1
+        icount(1) = jx
+        icount(2) = iy
+        allocate(rspace(icount(1),icount(2)))
+        allocate(irspace(icount(1),icount(2)))
+        allocate(rspacex(icount(1),icount(2),16))
+        call openfile_withname(dname,idmin)
+
+        call read_var2d_static(idmin,'mvegid',irspace,istart=istart,icount=icount)
+        call grid_distribute(irspace,mvegid,jci1,jci2,ici1,ici2)
+        call read_var2d_static(idmin,'cropdata',rspace,istart=istart,icount=icount)
+        call grid_distribute(rspace,vcrop,jci1,jci2,ici1,ici2)
+        call read_var2d_static(idmin,'soil_c_total',rspace,istart=istart,icount=icount)
+        call grid_distribute(rspace,soil_c,jci1,jci2,ici1,ici2)
+
+        allocate(tempmoist(jci1:jci2,ici1:ici2))
+        istart3(1:2) = istart
+        icount3(1:2) = icount
+        icount3(3) = 1
+        do ilev = 1 , 16
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vheight',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vheight(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call read_var2d_static(idmin,'cpool_restart',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          cpool(jci1:jci2,ici1:ici2,ilev) = tempmoist          
+          call read_var2d_static(idmin,'vhit_clm',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          clmhit(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call read_var2d_static(idmin,'vlaix',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vlaix(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call read_var2d_static(idmin,'frac_isl',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          frac_isl(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 18
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vfrac',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vfrac(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call read_var2d_static(idmin,'vfrac_clm',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          clmfrac(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 12
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'vlandf',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vlandf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 2
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'crop_cal',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          crop_cal(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 5
+          istart3(3) = ilev
+          call read_var2d_static(idmin,'soil_texture',rspace, &
+                                 istart=istart3,icount=icount3)
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          stext(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        deallocate(tempmoist)
+
+        allocate(temprsp(jci1:jci2,ici1:ici2,1:16))        
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+        istart4(3) = 1
+        icount4(3) = 16
+        icount4(4) = 1        
+        do ilev = 1 , 12
+          istart4(4) = ilev
+          call read_var3d_static(idmin,'laim16',rspacex, &
+                                 istart=istart4,icount=icount4)
+          call grid_distribute(rspacex,temprsp,jci1,jci2,ici1,ici2,1,16)
+          vlai(jci1:jci2,ici1:ici2,1:16,ilev) = temprsp
+          call read_var3d_static(idmin,'vlai_clm',rspacex, &
+                                 istart=istart4,icount=icount4)
+          call grid_distribute(rspacex,temprsp,jci1,jci2,ici1,ici2,1,16)
+          clmlai(jci1:jci2,ici1:ici2,1:16,ilev) = temprsp
+        end do    
+        deallocate(temprsp)        
+        
+        call closefile(idmin)
+        deallocate(rspace)
+        deallocate(irspace)
+        deallocate(rspacex)
+      else
+      !print*,"get hete 1111113333333"
+        call grid_distribute(irspace,mvegid,jci1,jci2,ici1,ici2)
+        call grid_distribute(rspace,vcrop,jci1,jci2,ici1,ici2)
+        call grid_distribute(rspace,soil_c,jci1,jci2,ici1,ici2)
+        allocate(tempmoist(jci1:jci2,ici1:ici2))
+        do ilev = 1 , 16
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vheight(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          cpool(jci1:jci2,ici1:ici2,ilev) = tempmoist          
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          clmhit(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vlaix(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          frac_isl(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 18
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vfrac(jci1:jci2,ici1:ici2,ilev) = tempmoist
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          clmfrac(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 12
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          vlandf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 2
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          crop_cal(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        do ilev = 1 , 5
+          call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+          stext(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        end do
+        deallocate(tempmoist)
+
+        allocate(temprsp(jci1:jci2,ici1:ici2,1:16))            
+        do ilev = 1 , 12
+          call grid_distribute(rspacex,temprsp,jci1,jci2,ici1,ici2,1,16)
+          vlai(jci1:jci2,ici1:ici2,1:16,ilev) = temprsp
+          call grid_distribute(rspacex,temprsp,jci1,jci2,ici1,ici2,1,16)
+          clmlai(jci1:jci2,ici1:ici2,1:16,ilev) = temprsp
+        end do
+        deallocate(temprsp)
+      end if
+    end if
+  end subroutine read_yibs_driver
+
+!!! xiaoxie 2017 added
+  subroutine read_yibs_data(stmp,smq,sifc,lmonth,totsize)
+    use netcdf
+    use mod_runparams
+    use mod_dynparam
+    use mod_ensemble
+    use mod_mpmessage
+    use mod_mppparam
+    use mod_memutil
+    use mod_nchelper
+    use mod_domain
+    implicit none
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: stmp
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: smq
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: sifc
+
+    character(len=256) :: dname
+    character(len=8) :: csmoist
+    integer(ik4) :: idmin , ilev,lmonth,totsize
+    integer(ik4) , dimension(2) :: istart , icount
+    integer(ik4) , dimension(3) :: istart3 , icount3
+    integer(ik4) , dimension(4) :: istart4 , icount4
+    real(rkx) , dimension(:,:) , pointer :: tempmoist
+    real(rkx) , dimension(:,:) , pointer :: rspace
+    real(rkx) , dimension(:,:,:) , pointer :: rspacex
+    real(rkx) , dimension(:,:,:) , pointer :: tempmoistx
+
+    write(csmoist,'(i0.2)') lmonth
+    dname = trim(dirter)//pthsep//'SRF'//trim(csmoist)//'.nc'
+    if ( myid == italk ) then
+      write(stdout,*) 'Reading yibs_spinupdata file : ', trim(dname)
+    end if
+
+    if ( do_parallel_netcdf_in ) then
+      istart(1) = jci1-1
+      istart(2) = ici1-1
+      icount(1) = jci2-jci1+1
+      icount(2) = ici2-ici1+1
+      call openfile_withname(dname,idmin)
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+        istart4(3) = 1
+        icount4(3) = 6
+        icount4(4) = 1 
+        allocate(rspacex(icount4(1),icount4(2),icount4(3)))
+        do ilev = 1, totsize
+        istart4(4) = ilev      
+        call read_var3d_static(idmin,'stmp',rspacex, &
+                                istart=istart4,icount=icount4)
+        stmp(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex
+        call read_var3d_static(idmin,'smq',rspacex, &
+                                istart=istart4,icount=icount4)
+        smq(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex
+        call read_var3d_static(idmin,'sifc',rspacex, &
+                                istart=istart4,icount=icount4)
+        sifc(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex 
+        end do                              
+      call closefile(idmin)
+      deallocate(rspacex)      
+    else
+      if ( myid == iocpu ) then
+        istart(1) = 1
+        istart(2) = 1
+        icount(1) = jx
+        icount(2) = iy
+        allocate(rspacex(icount(1),icount(2),6))
+        call openfile_withname(dname,idmin)
+
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+        istart4(3) = 1
+        icount4(3) = 6
+        icount4(4) = 1    
+        allocate(rspacex(icount4(1),icount4(2),icount4(3))) 
+        allocate(tempmoistx(jci1:jci2,ici1:ici2,6))
+        do ilev = 1, totsize
+        istart4(4) = ilev       
+        call read_var3d_static(idmin,'stmp',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6)
+        stmp(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx
+        call read_var3d_static(idmin,'smq',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6)
+        smq(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx
+        call read_var3d_static(idmin,'sifc',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6) 
+        sifc(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx
+        end do
+         
+        call closefile(idmin)
+        deallocate(tempmoistx)
+        deallocate(rspacex)
+      else
+        allocate(tempmoistx(jci1:jci2,ici1:ici2,6))
+        do ilev = 1, totsize
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6)
+        stmp(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6)
+        smq(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,6)
+        sifc(jci1:jci2,ici1:ici2,1:6,ilev) = tempmoistx 
+        end do         
+        deallocate(tempmoistx)   
+      end if
+    end if
+  end subroutine read_yibs_data
+
+
+!!! xiaoxie 2017 added
+  subroutine read_spinup_data(cosz,ch,taf,qaf,tas,&
+                              uas,vas,pard,parf,fwet,stmp,smq,sifc,lmonth,totsize)
+    use netcdf
+    use mod_runparams
+    use mod_dynparam
+    use mod_ensemble
+    use mod_mpmessage
+    use mod_mppparam
+    use mod_memutil
+    use mod_nchelper
+    use mod_domain
+    implicit none
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: ch
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: taf
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: qaf
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: tas
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: uas
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: vas
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: pard
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: parf
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: fwet
+    real(rkx) , pointer , dimension(:,:,:) , intent(inout) :: cosz
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: stmp
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: smq
+    real(rkx) , pointer , dimension(:,:,:,:) , intent(inout) :: sifc
+
+    character(len=256) :: dname
+    character(len=8) :: csmoist
+    integer(ik4) :: idmin , ilev,lmonth,totsize
+    integer(ik4) , dimension(2) :: istart , icount
+    integer(ik4) , dimension(3) :: istart3 , icount3
+    integer(ik4) , dimension(4) :: istart4 , icount4
+    real(rkx) , dimension(:,:) , pointer :: tempmoist
+    real(rkx) , dimension(:,:) , pointer :: rspace
+    real(rkx) , dimension(:,:,:) , pointer :: rspacex
+    real(rkx) , dimension(:,:,:) , pointer :: tempmoistx
+
+    write(csmoist,'(i0.2)') lmonth
+    dname = trim(dirter)//pthsep//'SRF'//trim(csmoist)//'.nc'
+    if ( myid == italk ) then
+      write(stdout,*) 'Reading yibs_spinupdata file : ', trim(dname)
+    end if
+
+    if ( do_parallel_netcdf_in ) then
+      istart(1) = jci1-1
+      istart(2) = ici1-1
+      icount(1) = jci2-jci1+1
+      icount(2) = ici2-ici1+1
+      allocate(rspace(icount(1),icount(2)))
+      call openfile_withname(dname,idmin)
+        istart4(1:2) = istart
+        icount4(1:2) = icount                  
+        istart4(3) = 1
+        icount4(3) = 1
+        icount4(4) = 1
+        do ilev = 1, totsize
+        istart4(4) = ilev
+        call read_var2d_static(idmin,'ch',rspace, &
+                                istart=istart4,icount=icount4)
+        ch(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'taf',rspace, &
+                                istart=istart4,icount=icount4)
+        taf(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'qaf',rspace, &
+                                istart=istart4,icount=icount4)
+        qaf(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'tas',rspace, &
+                                istart=istart4,icount=icount4)
+        tas(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'uas',rspace, &
+                                istart=istart4,icount=icount4)
+        uas(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'vas',rspace, &
+                                istart=istart4,icount=icount4)
+        vas(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'pard',rspace, &
+                                istart=istart4,icount=icount4)
+        pard(jci1:jci2,ici1:ici2,ilev) = rspace                                        
+        call read_var2d_static(idmin,'parf',rspace, &
+                                istart=istart4,icount=icount4)
+        parf(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'fwet',rspace, &
+                                istart=istart4,icount=icount4)
+        fwet(jci1:jci2,ici1:ici2,ilev) = rspace
+        call read_var2d_static(idmin,'cosz',rspace, &
+                                istart=istart4,icount=icount4)
+        cosz(jci1:jci2,ici1:ici2,ilev) = rspace 
+        end do 
+
+        istart4(3) = 1
+        icount4(3) = 10
+        icount4(4) = 1 
+        allocate(rspacex(icount4(1),icount4(2),icount4(3)))
+        do ilev = 1, totsize
+        istart4(4) = ilev      
+        call read_var3d_static(idmin,'stmp',rspacex, &
+                                istart=istart4,icount=icount4)
+        stmp(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex
+        call read_var3d_static(idmin,'smq',rspacex, &
+                                istart=istart4,icount=icount4)
+        smq(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex
+        call read_var3d_static(idmin,'sifc',rspacex, &
+                                istart=istart4,icount=icount4)
+        sifc(jci1:jci2,ici1:ici2,1:6,ilev) = rspacex 
+        end do    
+      call closefile(idmin)
+      deallocate(rspace) 
+      deallocate(rspacex)          
+    else
+      if ( myid == iocpu ) then
+        istart(1) = 1
+        istart(2) = 1
+        icount(1) = jx
+        icount(2) = iy
+        allocate(rspace(icount(1),icount(2)))
+        call openfile_withname(dname,idmin)
+
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+
+        istart4(3) = 1
+        icount4(3) = 1
+        icount4(4) = 1
+        allocate(tempmoist(jci1:jci2,ici1:ici2))
+        do ilev = 1, totsize
+        istart4(4) = ilev         
+        call read_var2d_static(idmin,'ch',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        ch(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'taf',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        taf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'qaf',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        qaf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'tas',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        tas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'uas',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        uas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'vas',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        vas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'pard',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2) 
+        pard(jci1:jci2,ici1:ici2,ilev) = tempmoist                                      
+        call read_var2d_static(idmin,'parf',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        parf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call read_var2d_static(idmin,'fwet',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2) 
+        fwet(jci1:jci2,ici1:ici2,ilev) = tempmoist  
+        call read_var2d_static(idmin,'cosz',rspace, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2) 
+        cosz(jci1:jci2,ici1:ici2,ilev) = tempmoist  
+        end do  
+
+        istart4(1:2) = istart
+        icount4(1:2) = icount
+        istart4(3) = 1
+        icount4(3) = 10
+        icount4(4) = 1    
+        allocate(rspacex(icount4(1),icount4(2),icount4(3))) 
+        allocate(tempmoistx(jci1:jci2,ici1:ici2,10))
+        do ilev = 1, totsize
+        istart4(4) = ilev       
+        call read_var3d_static(idmin,'stmp',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10)
+        stmp(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx
+        call read_var3d_static(idmin,'smq',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10)
+        smq(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx
+        call read_var3d_static(idmin,'sifc',rspacex, &
+                                istart=istart4,icount=icount4)
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10) 
+        sifc(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx
+        end do
+         
+
+        call closefile(idmin)
+        deallocate(tempmoistx)
+        deallocate(rspacex)        
+        deallocate(rspace)
+        deallocate(tempmoist)
+      else
+        allocate(tempmoist(jci1:jci2,ici1:ici2))
+        do ilev = 1, totsize
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        ch(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        taf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        qaf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        tas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        uas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        vas(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)                                       
+        pard(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2)
+        parf(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2) 
+        fwet(jci1:jci2,ici1:ici2,ilev) = tempmoist
+        call grid_distribute(rspace,tempmoist,jci1,jci2,ici1,ici2) 
+        cosz(jci1:jci2,ici1:ici2,ilev) = tempmoist 
+        end do       
+        deallocate(tempmoist)  
+
+        allocate(tempmoistx(jci1:jci2,ici1:ici2,10))
+        do ilev = 1, totsize
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10)
+        stmp(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10)
+        smq(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx
+        call grid_distribute(rspacex,tempmoistx,jci1,jci2,ici1,ici2,1,10)
+        sifc(jci1:jci2,ici1:ici2,1:10,ilev) = tempmoistx 
+        end do  
+        deallocate(tempmoistx)            
+      end if
+    end if
+  end subroutine read_spinup_data
+
+end module mod_lm_interface
+! vim: tabstop=8 expandtab shiftwidth=2 softtabstop=2
