@@ -29,4 +29,4 @@ Running
 ***You can use the cdo command (which you need to install first) in adding CO2 emission source files,which you can make with reference to the sample data
 11. Create the yibs input file
 ***You can refer to the example data yibs_driver.nc to create yibs input files using ncl
-12 ../bin/regcmMPICLM45 namelist_example.in 
+12. ../bin/regcmMPICLM45 namelist_example.in 
